@@ -147,7 +147,7 @@ code{background:var(--paper);padding:1px 5px;border-radius:3px;font-family:'IBM 
   <!-- ===================== CADASTRO: PADRÕES DE PAGAMENTO ===================== -->
   <div class="card">
     <div class="section-title">Cadastro — Pagamentos Recorrentes</div>
-    <div class="help">Reconhece pagamentos pela palavra-chave e já preenche a conta Débito e o histórico. "Origem" define onde procurar a palavra-chave: <b>Planilha</b> busca no histórico já unificado da planilha de fluxo de caixa (ex. nome do favorecido); <b>Extrato</b> busca direto no histórico do extrato bancário (ex. "DB. COTAS", que não aparece na planilha). Use <code>{CH}</code> no modelo de histórico onde quiser o número do cheque — ele é extraído automaticamente do texto "CH Nº ..." da planilha; se não achar, o trecho <code>{CH}</code> é removido. Pagamentos que não baterem com nenhum padrão nem com a planilha caem na conta de fallback abaixo, marcados pra revisão.</div>
+    <div class="help">Reconhece pagamentos pela palavra-chave e já preenche a conta Débito e o histórico. Pode cadastrar <b>mais de uma palavra separada por ponto-e-vírgula</b> — todas precisam aparecer no texto, em qualquer ordem e com qualquer coisa entre elas, sem precisar ser a frase exata. Ex.: <code>NEGOCIACAO;GAROPABA</code> casa tanto "NEGOCIAÇÃO COM O PATRONAL GAROPABA" quanto "NEGOCIAÇÃO COM O PATRONAL DE GAROPABA". "Origem" define onde procurar: <b>Planilha</b> busca no histórico já unificado da planilha de fluxo de caixa (ex. nome do favorecido); <b>Extrato</b> busca direto no histórico do extrato bancário (ex. "DB. COTAS", que não aparece na planilha). Use <code>{CH}</code> no modelo de histórico onde quiser o número do cheque — ele é extraído automaticamente do texto "CH Nº ..." da planilha; se não achar, o trecho <code>{CH}</code> é removido. Pagamentos que não baterem com nenhum padrão nem com a planilha caem na conta de fallback abaixo, marcados pra revisão.</div>
     <div class="table-wrap"><table class="preview" id="padroesPagTable"></table></div>
     <div class="btn-row">
       <button class="btn small ghost" onclick="addPadraoPagRow()">+ Novo padrão</button>
@@ -469,7 +469,7 @@ function renderPadroesPagTable(){
       <th>Palavra-chave</th><th>Origem</th><th>Débito</th><th>Modelo de Histórico</th><th></th>
     </tr></thead><tbody>` +
     padroesPagDB.map((p,i)=>`<tr>
-      <td class="cell"><input class="cell-input wide" value="${p.keyword||''}" onchange="updatePadraoPag(${i},'keyword',this.value)"></td>
+      <td class="cell"><input class="cell-input wide" placeholder="ex.: NEGOCIACAO;GAROPABA" value="${p.keyword||''}" onchange="updatePadraoPag(${i},'keyword',this.value)"></td>
       <td class="cell">
         <select class="cell-input" onchange="updatePadraoPag(${i},'origem',this.value)">
           <option value="excel" ${p.origem==='excel'?'selected':''}>Planilha</option>
@@ -501,11 +501,22 @@ function resolvePadraoPagHist(template, chNumero){
 // Procura um padrão cadastrado pro pagamento: histExcel é o histórico já unificado da
 // planilha (quando houve correspondência por valor), historicoExtrato é o texto cru do
 // extrato bancário — cada padrão diz em qual dos dois procurar sua palavra-chave.
+// Palavra-chave pode ter várias palavras/trechos separados por ";" — todos precisam
+// aparecer no texto (em qualquer ordem, com qualquer coisa entre eles), não precisa ser a
+// frase exata. Ex.: "NEGOCIACAO;GAROPABA" casa tanto "NEGOCIAÇÃO COM O PATRONAL GAROPABA"
+// quanto "NEGOCIAÇÃO COM O PATRONAL DE GAROPABA".
+function matchKeyword(keyword, texto){
+  if(!keyword || !texto) return false;
+  const alvoNorm = normalizeText(texto);
+  const partes = keyword.split(";").map(k=>normalizeText(k.trim())).filter(Boolean);
+  if(!partes.length) return false;
+  return partes.every(parte=> alvoNorm.includes(parte));
+}
 function matchPadraoPagamento(histExcel, historicoExtrato){
   for(const p of padroesPagDB){
     if(!p.keyword) continue;
     const alvo = p.origem === "extrato" ? historicoExtrato : histExcel;
-    if(alvo && normalizeText(alvo).includes(normalizeText(p.keyword))){
+    if(matchKeyword(p.keyword, alvo)){
       const chNumero = extractChNumero(histExcel);
       return { debito: p.debito, hist: resolvePadraoPagHist(p.hist, chNumero) };
     }
