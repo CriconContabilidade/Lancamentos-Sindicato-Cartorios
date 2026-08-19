@@ -102,7 +102,11 @@ table.preview tr.err{background:var(--red-bg);}
 .cell-input:hover{border-color:var(--rule-strong);}
 .cell-input:focus{outline:none;border-color:var(--ink);background:var(--paper-raised);}
 .cell-input.num{text-align:right;font-weight:600;}
-.cell-input.wide{min-width:220px;}
+.cell-input.wide{min-width:420px;}
+.status-th{text-align:center !important;}
+.status-icon{display:inline-block;font-size:14px;font-weight:700;cursor:default;}
+.status-icon.ok{color:var(--green-ink);}
+.status-icon.warn{color:var(--amber);}
 td.cell{padding:2px 4px;}
 
 .hidden{display:none !important;}
@@ -540,17 +544,20 @@ function renderTable(pagamentosSobrando, semPar){
     ${sortTh('tableState',tableState,'debito','Débito','renderTable')}
     ${sortTh('tableState',tableState,'credito','Crédito','renderTable')}
     ${sortTh('tableState',tableState,'valor','Valor','renderTable')}
-    <th>Histórico</th><th>Origem (extrato)</th><th>Status</th>
+    <th class="status-th" title="Passe o mouse pra ver o detalhe">Status</th><th>Histórico</th><th>Origem (extrato)</th>
   </tr></thead><tbody>`;
   indexed.forEach(({row:r, idx:i})=>{
+    const statusIcon = r.flag
+      ? `<span class="status-icon warn" title="${(r.statusText||'').replace(/"/g,'&quot;')}">⚠</span>`
+      : `<span class="status-icon ok" title="${(r.statusText||'').replace(/"/g,'&quot;')}">✓</span>`;
     html += `<tr class="${r.flag?'flag':''}">
       <td class="cell"><input class="cell-input" value="${fmtDateBR(r.data)}" onchange="updateRow(${i},'data',this.value)"></td>
       <td class="cell"><input class="cell-input" style="width:60px" value="${r.debito??''}" onchange="updateRow(${i},'debito',this.value)"></td>
       <td class="cell"><input class="cell-input" style="width:60px" value="${r.credito??''}" onchange="updateRow(${i},'credito',this.value)"></td>
       <td class="cell"><input class="cell-input num" value="${fmtBRL(r.valor)}" onchange="updateRow(${i},'valor',this.value)"></td>
+      <td style="text-align:center">${statusIcon}</td>
       <td class="cell"><input class="cell-input wide" value="${r.hist||r.complemento||''}" onchange="updateRow(${i},'hist',this.value)"></td>
-      <td style="font-size:11px;color:var(--ink-soft);max-width:220px;">${r.origem||''}</td>
-      <td>${r.statusText||''}</td>
+      <td style="font-size:11px;color:var(--ink-soft);max-width:200px;">${r.origem||''}</td>
     </tr>`;
   });
   html += `</tbody></table></div>
