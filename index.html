@@ -136,6 +136,7 @@ code{background:var(--paper);padding:1px 5px;border-radius:3px;font-family:'IBM 
       <div class="field"><label>Código da Empresa</label><input id="codEmp" value="365"></div>
       <div class="field"><label>Conta Banco</label><input id="contaBanco" value="10"></div>
       <div class="field"><label>Conta Contribuição Assistencial (recebimentos)</label><input id="contaContrib" value="97"></div>
+      <div class="field"><label>Conta Aplicação Financeira</label><input id="contaAplicacao" value="108"></div>
     </div>
   </div>
 
@@ -144,7 +145,8 @@ code{background:var(--paper);padding:1px 5px;border-radius:3px;font-family:'IBM 
     <div class="section-title">Arquivos do mês</div>
     <div class="help">
       <b>Recebimentos</b> — toda entrada do extrato vira lançamento Débito Banco / Crédito conta de Contribuição Assistencial. Quando o PIX/TED do extrato traz o nome de quem transferiu, o histórico vira <code>RECEBIMENTO REF. CONTRIBUICAO ASSISTENCIAL - &lt;NOME&gt;</code>; quando é só "DEPOSITO" ou "CR.DEP.INTERC" (sem nome), vira <code>RECEBIMENTO REF. DEPOSITO DE CONTRIBUIÇÃO ASSISTENCIAL EM ESPÉCIE</code>.<br>
-      <b>Pagamentos</b> — toda saída do extrato vira lançamento com a conta Débito em branco (pra você completar à mão) e Crédito Banco. O histórico é buscado na planilha de fluxo de caixa: cada pagamento aparece lá em <b>duas linhas</b> (uma "entrada" que autoriza o cheque, e a "saída" do cheque em si) — a ferramenta une as duas num histórico só, em caixa alta, e casa com a linha do extrato pelo valor.
+      <b>Pagamentos</b> — toda saída do extrato vira lançamento com a conta Débito em branco (pra você completar à mão) e Crédito Banco. O histórico é buscado na planilha de fluxo de caixa: cada pagamento aparece lá em <b>duas linhas</b> (uma "entrada" que autoriza o cheque, e a "saída" do cheque em si) — a ferramenta une as duas num histórico só, em caixa alta, e casa com a linha do extrato pelo valor.<br>
+      <b>Aplicação financeira</b> — linhas de aplicação/resgate no extrato (ex. "DB.APL.RDCPOS"/"CR.APL.RDCPOS") usam sempre a mesma conta (108) nos dois lados: débito quando o dinheiro sai pra aplicar (<code>VALOR REF. APLICAÇÃO FINANCEIRA</code>), crédito quando volta no resgate (<code>VALOR REF. RESGATE DE APLICAÇÃO FINANCEIRA</code>) — reconhecidas automaticamente, sem precisar completar nada.
     </div>
     <div class="field-row">
       <div class="field">
@@ -409,6 +411,13 @@ function buildRecebimentoHist(historico){
   }
   return { hist:null, ok:false };
 }
+// Aplicação financeira (RDC) — mesma conta (108) nos dois sentidos: débito quando o dinheiro
+// sai da conta corrente pra aplicar (ex. "DB.APL.RDCPOS"), crédito quando volta (resgate,
+// ex. "CR.APL.RDCPOS"). Reconhece pela presença de "APL" + "RDCPOS" no histórico, independente
+// do prefixo DB./CR. usado pelo banco.
+function isAplicacaoFinanceira(historico){
+  return /APL.{0,3}RDCPOS/i.test(historico.replace(/\s+/g,""));
+}
 
 /* =========================================================================
    PROCESSAMENTO
@@ -452,9 +461,24 @@ let tableState = makeTableState();
 function processar(){
   const contaBanco = document.getElementById("contaBanco").value.trim() || "10";
   const contaContrib = document.getElementById("contaContrib").value.trim() || "97";
+  const contaAplicacao = document.getElementById("contaAplicacao").value.trim() || "108";
   const pagamentosExcel = excelState.pagamentos.map(p=>({...p, usado:false}));
   const rows = [];
   extratoState.forEach(l=>{
+    if(isAplicacaoFinanceira(l.historico)){
+      const saida = l.tipo === "D"; // saída = aplicando; entrada = resgatando
+      rows.push({
+        data:l.data,
+        debito: saida ? contaAplicacao : contaBanco,
+        credito: saida ? contaBanco : contaAplicacao,
+        valor:l.valor,
+        hist: saida ? "VALOR REF. APLICAÇÃO FINANCEIRA" : "VALOR REF. RESGATE DE APLICAÇÃO FINANCEIRA",
+        complemento:null, iniciaLote:1, flag:false,
+        statusText: "OK (aplicação financeira)",
+        origem:l.historico
+      });
+      return;
+    }
     if(l.tipo==="C"){
       const {hist, ok} = buildRecebimentoHist(l.historico);
       rows.push({
