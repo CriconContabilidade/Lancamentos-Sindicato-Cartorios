@@ -160,6 +160,35 @@ code{background:var(--paper);padding:1px 5px;border-radius:3px;font-family:'IBM 
   <!-- ===================== RESULTADO ===================== -->
   <div class="card hidden" id="resultCard"></div>
 
+  <!-- ===================== BAIXA DE ENTRADAS (CONTAS A PAGAR) ===================== -->
+  <div class="card">
+    <div class="section-title">Baixa de Entradas — Contas a Pagar de Fornecedor <span id="cnpjCloudStatus" class="badge info">Conectando…</span></div>
+    <div class="help">Pra fornecedores com nota fiscal registrada no Domínio (Contas a Pagar) — diferente dos pagamentos discricionários acima. Casa cada título "Aberta" contra os extratos bancários por <b>soma exata</b> (pode ser mais de uma nota no mesmo cheque), sempre dentro do mesmo fornecedor — nunca mistura notas de fornecedores diferentes só porque a soma bateu. O CNPJ de cada fornecedor vem do cadastro compartilhado do escritório; solte um relatório de Fornecedores do Domínio na caixinha abaixo se algum não for reconhecido. Pode soltar vários meses de extrato de uma vez.</div>
+    <div class="field-row">
+      <div class="field">
+        <label>Contas a Pagar por Fornecedor (PDF)</label>
+        <div class="dropzone small-drop" id="contasPagarDrop"><div class="big">Arraste o PDF aqui</div><div class="small">Lê sozinho a empresa (CNPJ) do cabeçalho</div><input type="file" id="contasPagarFile" accept="application/pdf"></div>
+      </div>
+      <div class="field">
+        <label>Extrato(s) bancário(s) — Credcrea (PDF)</label>
+        <div class="dropzone small-drop" id="extratosBaixaDrop"><div class="big">Arraste um ou mais extratos aqui</div><div class="small">Pode soltar vários meses juntos</div><input type="file" id="extratosBaixaFile" accept="application/pdf" multiple></div>
+      </div>
+    </div>
+    <div id="baixaUploadStatus" class="status-line hidden"></div>
+    <div class="btn-row">
+      <button class="btn" id="processBaixaBtn" onclick="processarBaixaEntradas()" disabled>Gerar baixa de entradas</button>
+    </div>
+  </div>
+  <div class="card hidden" id="resultBaixaCard"></div>
+
+  <!-- ===================== CNPJ NÃO ENCONTRADO (fallback) ===================== -->
+  <div class="card hidden" id="cnpjHelperCard">
+    <div class="section-title">CNPJs não encontrados — importar Fornecedores.pdf</div>
+    <div class="help">Solte o relatório de Fornecedores do Domínio (PDF) pra completar o cadastro compartilhado <span id="cnpjHelperEmpresa"></span>.</div>
+    <div class="dropzone small-drop" id="cadPdfDrop"><div class="big">Arraste o PDF de Fornecedores aqui</div><input type="file" id="cadPdfFile" accept="application/pdf"></div>
+    <div id="cadPdfStatus" class="status-line hidden"></div>
+  </div>
+
   <!-- ===================== CADASTRO: PADRÕES DE PAGAMENTO ===================== -->
   <div class="card">
     <div class="section-title">Cadastro — Pagamentos Recorrentes</div>
@@ -259,6 +288,7 @@ function stripAccents(s){ return String(s??"").normalize("NFD").replace(/[̀-ͯ]
 function normalizeText(s){
   return (s||"").toString().normalize("NFD").replace(/[̀-ͯ]/g,"").toUpperCase().trim();
 }
+function onlyDigits(s){ return (s||"").toString().replace(/\D/g,""); }
 
 function wireDropzone(dropId, inputId, onFile){
   const drop = document.getElementById(dropId);
@@ -270,6 +300,18 @@ function wireDropzone(dropId, inputId, onFile){
   drop.addEventListener("drop", e=>{
     e.preventDefault(); drop.classList.remove("drag");
     if(e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0], drop);
+  });
+}
+function wireDropzoneMulti(dropId, inputId, onFiles){
+  const drop = document.getElementById(dropId);
+  const input = document.getElementById(inputId);
+  drop.addEventListener("click", ()=>input.click());
+  input.addEventListener("change", ()=>{ if(input.files.length) onFiles([...input.files], drop); });
+  drop.addEventListener("dragover", e=>{ e.preventDefault(); drop.classList.add("drag"); });
+  drop.addEventListener("dragleave", ()=> drop.classList.remove("drag"));
+  drop.addEventListener("drop", e=>{
+    e.preventDefault(); drop.classList.remove("drag");
+    if(e.dataTransfer.files.length) onFiles([...e.dataTransfer.files], drop);
   });
 }
 function markDropDone(drop, label){
@@ -525,6 +567,140 @@ function matchPadraoPagamento(histExcel, historicoExtrato){
 }
 
 /* =========================================================================
+   BAIXA DE ENTRADAS — dá baixa nos títulos de fornecedor registrados no
+   Domínio (Contas a Pagar), casando por soma exata contra os extratos
+   bancários (pode ser mais de uma nota no mesmo cheque). Reaproveita o
+   mesmo motor validado na ferramenta "Baixas de Parcelas" do Hub.
+   ========================================================================= */
+const EMPRESA_RE = /^Empresa:\s*(.+?)\s+P.gina/i;
+const CNPJ_HEADER_RE = /CNPJ:\s*([\d.\/-]{14,18})/;
+const GROUP_RE = /^(Cliente|Fornecedor):\s*(\d+)\s*-\s*(.+)$/;
+const TITULO_RE = /^(\S+)\s+(\d{2}\/\d{2}\/\d{4})\s+\d{2}\/\d{2}\/\d{4}\s+(\d{2}\/\d{2}\/\d{4})\s+([\d.,]+)\s+([\d.,]+)\s+[\d.,]+\s+[\d.,]+\s+[\d.,]+\s+[\d.,]+\s+[\d.,]+\s+[\d.,]+\s*(Aberta|Parcial|Baixada|Recebida|Paga)$/;
+
+async function parseContasReport(file){
+  const pages = await extractPdfAllLines(file);
+  const allLines = pages.flat();
+  const fullText = allLines.join("\n");
+  let empresaNome=null, empresaCnpj=null;
+  const em = fullText.match(EMPRESA_RE); if(em) empresaNome = em[1].trim();
+  const cm = fullText.match(CNPJ_HEADER_RE); if(cm) empresaCnpj = onlyDigits(cm[1]);
+  const titulos=[]; let codigo=null, nomeParceiro=null;
+  allLines.forEach(line=>{
+    const gm = line.match(GROUP_RE);
+    if(gm){ codigo=gm[2]; nomeParceiro=gm[3].trim(); return; }
+    if(/^Sub Total/i.test(line) || /^Total Geral/i.test(line) || /^Documento/i.test(line)) return;
+    const tm = line.match(TITULO_RE);
+    if(tm && codigo!=null){
+      titulos.push({ codigo, nome:nomeParceiro, documento:tm[1], emissao:brParts(tm[2]), vencimento:brParts(tm[3]), valorParcela:parseBRL(tm[4]), valorBaixado:parseBRL(tm[5]), situacao:tm[6] });
+    }
+  });
+  return {empresaNome, empresaCnpj, titulos};
+}
+
+// Janela mais larga que o normal — cheque nominal a fornecedor costuma atrasar bem mais do
+// que recebimento de cliente, o caixa aperta e o pagamento sai meses depois do vencimento.
+const WINDOWS_ENTRADAS = [[0,10],[-5,30],[-15,90],[-30,240]];
+function dpSubsetExact(pool, targetCents){
+  const n = pool.length;
+  const vals = pool.map(p=>p._cents);
+  const order = [...Array(n).keys()].sort((a,b)=>vals[b]-vals[a]);
+  let result = null;
+  function rec(i, remaining, chosen){
+    if(result) return;
+    if(remaining===0){ result = chosen.slice(); return; }
+    if(i>=n || remaining<0) return;
+    let rest=0; for(let j=i;j<n;j++) rest += vals[order[j]];
+    if(rest < remaining) return;
+    const idx = order[i];
+    chosen.push(idx);
+    rec(i+1, remaining-vals[idx], chosen);
+    chosen.pop();
+    if(result) return;
+    rec(i+1, remaining, chosen);
+  }
+  rec(0, targetCents, []);
+  return result ? result.map(i=>pool[i]) : null;
+}
+// Um cheque paga UM fornecedor por vez — a busca de subconjunto roda separada, por
+// fornecedor (nunca mistura títulos de fornecedores diferentes num mesmo pagamento). Se MAIS
+// DE UM fornecedor bate com o mesmo valor do extrato dentro da janela, fica ambíguo de
+// propósito — nunca escolhe um "no chute".
+function matchAllScoped(lumps, abertos, windows){
+  abertos.forEach(a=>{ a._cents = Math.round(a.valorParcela*100); a._used = false; });
+  const porCodigo = {};
+  abertos.forEach(a=>{ (porCodigo[a.codigo] = porCodigo[a.codigo]||[]).push(a); });
+  const codigos = Object.keys(porCodigo);
+  const results = {};
+  const wideResolved = new Set();
+  const ambiguous = {};
+  let remaining = lumps.map((_,i)=>i);
+  for(let passNo=0; passNo<windows.length; passNo++){
+    const [wlo, whi] = windows[passNo];
+    const still = [];
+    remaining.forEach(idx=>{
+      const targetCents = Math.round(lumps[idx].valor*100);
+      const candidatos = [];
+      codigos.forEach(cod=>{
+        const pool = porCodigo[cod].filter(a=> !a._used && diffDaysBaixa(lumps[idx].data, a.vencimento)>=wlo && diffDaysBaixa(lumps[idx].data, a.vencimento)<=whi);
+        if(!pool.length) return;
+        const found = dpSubsetExact(pool, targetCents);
+        if(found) candidatos.push({codigo:cod, found});
+      });
+      if(candidatos.length===1){
+        candidatos[0].found.forEach(a=>a._used=true);
+        results[idx] = candidatos[0].found;
+        if(passNo>0) wideResolved.add(idx);
+      } else if(candidatos.length>1){
+        ambiguous[idx] = candidatos.map(c=>({codigo:c.codigo, nome:c.found[0].nome}));
+        still.push(idx);
+      } else {
+        still.push(idx);
+      }
+    });
+    remaining = still;
+  }
+  const unmatchedAbertos = abertos.filter(a=>!a._used);
+  return {results, wideResolved, unmatchedLumpIdx:remaining, unmatchedAbertos, ambiguous};
+}
+function diffDaysBaixa(a,b){ return Math.round((partsToDate(a)-partsToDate(b))/86400000); }
+
+/* ---- CNPJ: cadastro compartilhado (mesmo Firestore usado no resto do Hub) ---- */
+function loadClientes(){ const raw = localStorage.getItem("cibele_clientes_fornecedores"); return raw ? JSON.parse(raw) : {}; }
+function saveClientesDB(db){ localStorage.setItem("cibele_clientes_fornecedores", JSON.stringify(db)); }
+let clientesDB = loadClientes();
+function setClientesDB(db){ clientesDB = db; window.clientesDB = db; saveClientesDB(db); rebuildCodigoIndex(); }
+window.clientesDB = clientesDB;
+let codigoIndex = {};
+function rebuildCodigoIndex(){
+  codigoIndex = {};
+  Object.keys(clientesDB).forEach(doc=>{
+    const codigos = clientesDB[doc].codigos || {};
+    Object.keys(codigos).forEach(k=>{ codigoIndex[`${k}_${codigos[k]}`] = doc; });
+  });
+}
+function findBestMatchCnpj(nome, db){
+  const norm = normalizeText(nome);
+  const words = norm.split(/\s+/).filter(w=>w.length>2);
+  let best=null, bestScore=0, bestKey=null;
+  Object.keys(db).forEach(key=>{
+    const c = db[key];
+    const cn = normalizeText(c.razao_social);
+    let score = 0;
+    if(cn.includes(norm) || norm.includes(cn)) score += 10;
+    words.forEach(w=>{ if(cn.includes(w)) score += 1; });
+    if(score>bestScore){ bestScore=score; best=c; bestKey=key; }
+  });
+  return bestScore>0 ? {documento:bestKey, nome:best.razao_social} : null;
+}
+function resolverCnpjFornecedor(empresaCnpj, codigo, nomeRelatorio){
+  const chave = `${empresaCnpj}_fornecedor_${codigo}`;
+  const doc = codigoIndex[chave];
+  if(doc && clientesDB[doc]) return {documento:doc, nome:clientesDB[doc].razao_social};
+  return findBestMatchCnpj(nomeRelatorio, clientesDB);
+}
+rebuildCodigoIndex();
+
+/* =========================================================================
    PROCESSAMENTO
    ========================================================================= */
 let extratoState = null;
@@ -706,7 +882,283 @@ function downloadTxtLanc(){
   setExportStatus(`${rowsState.length} lançamento(s) exportado(s) em lanctos.txt.`, "ok");
 }
 
+/* =========================================================================
+   BAIXA DE ENTRADAS — fluxo principal
+   ========================================================================= */
+let contasPagarState = null;
+let extratosBaixaState = null;
+wireDropzone("contasPagarDrop","contasPagarFile", async (f,d)=>{
+  const status = document.getElementById("baixaUploadStatus");
+  status.classList.remove("hidden","err"); status.textContent = "Lendo Contas a Pagar...";
+  try{
+    const parsed = await parseContasReport(f);
+    if(!parsed.empresaCnpj) throw new Error('Não achei "CNPJ:" no cabeçalho desse relatório — confere se é o PDF certo.');
+    if(!parsed.titulos.length) throw new Error("Não encontrei nenhum título nesse relatório.");
+    contasPagarState = parsed;
+    markDropDone(d, `${parsed.empresaNome} (${parsed.titulos.length} títulos)`);
+    status.classList.add("hidden");
+  }catch(err){
+    status.classList.remove("hidden"); status.classList.add("err"); status.textContent = "Erro: " + err.message;
+    contasPagarState = null;
+  }
+  atualizarBotaoBaixa();
+});
+wireDropzoneMulti("extratosBaixaDrop","extratosBaixaFile", async (files,d)=>{
+  const status = document.getElementById("baixaUploadStatus");
+  status.classList.remove("hidden","err"); status.textContent = "Lendo extrato(s)...";
+  try{
+    const lumps = [];
+    for(const f of files){
+      const linhas = await parseExtratoCredcrea(f);
+      linhas.filter(l=>l.tipo==="D").forEach(l=> lumps.push({data:l.data, valor:l.valor}));
+    }
+    extratosBaixaState = lumps;
+    if(!extratosBaixaState.length) throw new Error("Nenhuma saída (débito) reconhecida nesse(s) extrato(s).");
+    markDropDone(d, `${files.length===1?files[0].name:files.length+" arquivo(s)"} (${extratosBaixaState.length} saída(s))`);
+    status.classList.add("hidden");
+  }catch(err){
+    status.classList.remove("hidden"); status.classList.add("err"); status.textContent = "Erro: " + err.message;
+    extratosBaixaState = null;
+  }
+  atualizarBotaoBaixa();
+});
+function atualizarBotaoBaixa(){
+  document.getElementById("processBaixaBtn").disabled = !(contasPagarState && extratosBaixaState);
+}
+
+let baixaRowsState = [];
+let baixaTableState = makeTableState();
+let baixaAmbiguousState = [];
+function processarBaixaEntradas(){
+  const abertos = contasPagarState.titulos.filter(t=> normalizeText(t.situacao).startsWith("ABERT"));
+  const lumps = extratosBaixaState;
+  const {results, wideResolved, unmatchedLumpIdx, unmatchedAbertos, ambiguous} = matchAllScoped(lumps, abertos.map(a=>({...a})), WINDOWS_ENTRADAS);
+
+  const rows = [];
+  const order = Object.keys(results).map(Number).sort((a,b)=> partsToDate(lumps[a].data)-partsToDate(lumps[b].data));
+  order.forEach(idx=>{
+    const isWide = wideResolved.has(idx);
+    results[idx].forEach(t=> rows.push(buildBaixaRow(t, lumps[idx].data, isWide?"warn":null, isWide?"Conciliado (janela larga, conferir)":"OK", true)));
+  });
+  unmatchedAbertos.sort((a,b)=> partsToDate(a.vencimento)-partsToDate(b.vencimento)).forEach(t=>{
+    rows.push(buildBaixaRow(t, null, "err", "Sem correspondência no extrato", false));
+  });
+  baixaAmbiguousState = ambiguous ? Object.keys(ambiguous).map(idxStr=>{
+    const idx = Number(idxStr);
+    return { data: lumps[idx].data, valor: lumps[idx].valor, candidatos: ambiguous[idxStr].map(c=>c.nome) };
+  }) : [];
+
+  baixaRowsState = rows;
+  baixaTableState = makeTableState();
+  renderBaixaTable();
+}
+function buildBaixaRow(titulo, dataBaixa, statusClass, statusText, incluir){
+  const cnpjInfo = resolverCnpjFornecedor(contasPagarState.empresaCnpj, titulo.codigo, titulo.nome);
+  const cls = cnpjInfo ? statusClass : "err";
+  const txt = cnpjInfo ? statusText : "CNPJ não encontrado no cadastro";
+  return {
+    numero: titulo.documento, cnpj: cnpjInfo?cnpjInfo.documento:"", nome: cnpjInfo?cnpjInfo.nome:titulo.nome,
+    vencimento: titulo.vencimento, databaixa: dataBaixa, valor: titulo.valorParcela,
+    juros:0, multa:0, desconto:0, incluir: !!(incluir && cnpjInfo),
+    statusClass: cls, statusText: txt,
+  };
+}
+function renderBaixaTable(){
+  const box = document.getElementById("resultBaixaCard");
+  box.classList.remove("hidden");
+  const rows = baixaRowsState;
+  const nOk = rows.filter(r=>!r.statusClass).length;
+  const nWarn = rows.filter(r=>r.statusClass==="warn").length;
+  const nErr = rows.filter(r=>r.statusClass==="err").length;
+  const nIncluir = rows.filter(r=>r.incluir).length;
+  const indexed = filterSortRows(rows, baixaTableState, r=>[r.numero,r.cnpj,r.nome,r.statusText]);
+  let html = `<div class="section-title">${contasPagarState.empresaNome} — baixa_ent.txt</div>
+  <div class="summary-row">
+    <div class="item"><div class="k">Linhas</div><div class="v">${rows.length}</div></div>
+    <div class="item"><div class="k">Marcadas p/ incluir</div><div class="v">${nIncluir}</div></div>
+    <div class="item"><div class="k">OK</div><div class="v">${nOk}</div></div>
+    <div class="item"><div class="k">Conferir</div><div class="v">${nWarn}</div></div>
+    <div class="item"><div class="k">Pendente</div><div class="v">${nErr}</div></div>
+  </div>
+  ${baixaAmbiguousState.length ? `<div class="status-line err">Atenção: ${baixaAmbiguousState.length} pagamento(s) do extrato batem com o valor de títulos abertos de <b>mais de um fornecedor</b> — não escolhi nenhum sozinho pra não vincular a nota errada. Confira à mão: ${baixaAmbiguousState.map(a=>`${fmtDateBR(a.data)} ${fmtBRL(a.valor)} (${a.candidatos.join(" OU ")})`).join("; ")}</div>` : ""}
+  <div class="help">Vermelho = falta CNPJ ou não achou correspondência no extrato; amarelo = casou com intervalo grande entre vencimento e pagamento (conferir). A coluna <b>Incluir</b> decide o que entra no arquivo — títulos sem correspondência começam desmarcados.</div>
+  <div class="table-toolbar"><input type="search" value="${baixaTableState.filter}" placeholder="Filtrar por nota, CNPJ ou nome..." oninput="baixaTableState.filter=this.value; renderBaixaTable();"><span class="count">${indexed.length===rows.length?`${rows.length} linha(s)`:`${indexed.length} de ${rows.length}`}</span></div>
+  <div class="table-wrap"><table class="preview"><thead><tr>
+    <th>Incluir</th><th>Nº Nota</th><th>CNPJ/CPF</th><th>Nome</th><th>Vencimento</th><th>Data Baixa</th><th>Valor Pago</th><th>Juros</th><th>Multa</th><th>Desconto</th><th>Status</th>
+  </tr></thead><tbody>`;
+  indexed.forEach(({row:r, idx:i})=>{
+    html += `<tr class="${r.statusClass||''}">
+      <td style="text-align:center"><input type="checkbox" ${r.incluir?'checked':''} onchange="updateBaixaRow(${i},'incluir',this.checked)"></td>
+      <td class="cell"><input class="cell-input" value="${r.numero}" onchange="updateBaixaRow(${i},'numero',this.value)"></td>
+      <td class="cell"><input class="cell-input wide" value="${r.cnpj}" onchange="updateBaixaRow(${i},'cnpj',this.value)"></td>
+      <td>${r.nome||""}</td>
+      <td class="cell"><input class="cell-input" value="${fmtDateBR(r.vencimento)}" onchange="updateBaixaRow(${i},'vencimento',this.value)"></td>
+      <td class="cell"><input class="cell-input" value="${fmtDateBR(r.databaixa)}" onchange="updateBaixaRow(${i},'databaixa',this.value)"></td>
+      <td class="cell"><input class="cell-input num" value="${fmtBRL(r.valor)}" onchange="updateBaixaRow(${i},'valor',this.value)"></td>
+      <td class="cell"><input class="cell-input num" value="${fmtBRL(r.juros)}" onchange="updateBaixaRow(${i},'juros',this.value)"></td>
+      <td class="cell"><input class="cell-input num" value="${fmtBRL(r.multa)}" onchange="updateBaixaRow(${i},'multa',this.value)"></td>
+      <td class="cell"><input class="cell-input num" value="${fmtBRL(r.desconto)}" onchange="updateBaixaRow(${i},'desconto',this.value)"></td>
+      <td>${r.statusText}</td>
+    </tr>`;
+  });
+  html += `</tbody></table></div>
+  <div class="btn-row">
+    <button class="btn" onclick="downloadBaixaXlsx()">Baixar baixa_entradas.xlsx</button>
+    <button class="btn ghost" onclick="downloadBaixaTxt()">Baixar baixa_ent.txt</button>
+  </div>
+  <div id="baixaExportStatus" class="status-line hidden"></div>`;
+  box.innerHTML = html;
+  document.getElementById("cnpjHelperCard").classList.toggle("hidden", nErr===0 || rows.every(r=>r.cnpj));
+  document.getElementById("cnpjHelperEmpresa").textContent = `da empresa ${contasPagarState.empresaNome} (CNPJ ${contasPagarState.empresaCnpj})`;
+}
+function updateBaixaRow(i, field, val){
+  const r = baixaRowsState[i];
+  if(field==="vencimento" || field==="databaixa"){ const dt=brParts(val); r[field] = dt || null; }
+  else if(["valor","juros","multa","desconto"].includes(field)){ const n=parseBRL(val); if(n!=null) r[field]=n; }
+  else if(field==="incluir"){ r.incluir = !!val; }
+  else { r[field]=val; }
+  renderBaixaTable();
+}
+const BAIXA_ENT_HEADER = ["Número da Nota","CPF/CNPJ do Fornecedor","Data de Vencimento da Parcela","Data da Baixa da Parcela","Valor Pago","Valor Juros","Valor Multa","Valor Desconto"];
+function baixaRowArray(r){ return [r.numero, onlyDigits(r.cnpj), fmtDateBR(r.vencimento), fmtDateBR(r.databaixa), r.valor, r.juros, r.multa, r.desconto]; }
+function downloadBaixaXlsx(){
+  const incluidas = baixaRowsState.filter(r=>r.incluir);
+  downloadXlsx("baixa_entradas.xlsx", [BAIXA_ENT_HEADER, ...incluidas.map(baixaRowArray)], "Baixa");
+  const el = document.getElementById("baixaExportStatus");
+  el.classList.remove("hidden"); el.className="status-line ok"; el.textContent = `${incluidas.length} título(s) exportado(s).`;
+}
+function downloadBaixaTxt(){
+  const incluidas = baixaRowsState.filter(r=>r.incluir);
+  const semCnpj = incluidas.filter(r=>!onlyDigits(r.cnpj));
+  if(semCnpj.length){
+    if(!confirm(`${semCnpj.length} linha(s) marcada(s) pra incluir ainda estão sem CNPJ. Gerar mesmo assim (serão rejeitadas pelo Domínio)?`)) return;
+  }
+  const lines = incluidas.map(r=> baixaRowArray(r).map((v,i)=> i===4 ? fmtValorTxt(v) : (typeof v==="string"?stripAccents(v):v)).join(";"));
+  downloadTextAnsi("baixa_ent.txt", lines.join("\r\n") + "\r\n");
+  const el = document.getElementById("baixaExportStatus");
+  el.classList.remove("hidden"); el.className="status-line ok"; el.textContent = `${incluidas.length} título(s) exportado(s) em baixa_ent.txt.`;
+}
+
+/* ---- Fallback: importar Fornecedores.pdf pra completar o cadastro de CNPJ ---- */
+const BR_UFS = {"ACRE":"AC","ALAGOAS":"AL","AMAPA":"AP","AMAZONAS":"AM","BAHIA":"BA","CEARA":"CE","DISTRITO FEDERAL":"DF","ESPIRITO SANTO":"ES","GOIAS":"GO","MARANHAO":"MA","MATO GROSSO DO SUL":"MS","MATO GROSSO":"MT","MINAS GERAIS":"MG","PARAIBA":"PB","PARANA":"PR","PERNAMBUCO":"PE","PIAUI":"PI","RIO DE JANEIRO":"RJ","RIO GRANDE DO NORTE":"RN","RIO GRANDE DO SUL":"RS","RONDONIA":"RO","RORAIMA":"RR","SANTA CATARINA":"SC","SAO PAULO":"SP","SERGIPE":"SE","TOCANTINS":"TO","PARA":"PA"};
+const BR_UF_NAMES = Object.keys(BR_UFS).sort((a,b)=>b.length-a.length);
+const DOC_RE = /(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}|\d{3}\.\d{3}\.\d{3}-\d{2})/;
+function splitCidadeUfPais(tail){
+  let t = normalizeText(tail).replace(/\bBRASIL\b\s*$/,"").trim();
+  t = t.replace(/^\d{4,12}\s+/,"");
+  for(const name of BR_UF_NAMES){
+    const re = new RegExp("\\s+"+name+"$");
+    if(re.test(t)) return {municipio: t.replace(re,"").trim(), uf: BR_UFS[name]};
+  }
+  return {municipio: t.trim(), uf: ""};
+}
+function parseFornecedoresPdf(allLines){
+  const out = [];
+  allLines.forEach(line=>{
+    if(!/BRASIL\s*$/i.test(line)) return;
+    const m = line.match(DOC_RE);
+    if(!m) return;
+    const before = line.slice(0, m.index).trim();
+    const after = line.slice(m.index + m[0].length).trim();
+    const codMatch = before.match(/^(\d{1,6})\s*(.*)$/);
+    const codigo = codMatch ? codMatch[1] : null;
+    const nome = (codMatch ? codMatch[2] : before).trim();
+    if(!nome) return;
+    const {municipio, uf} = splitCidadeUfPais(after);
+    out.push({codigo, documento:onlyDigits(m[0]), tipo: onlyDigits(m[0]).length===14?"CNPJ":"CPF", razao_social: nome, endereco:"", municipio, uf, cep:""});
+  });
+  return out;
+}
+wireDropzone("cadPdfDrop","cadPdfFile", async (f,d)=>{
+  const status = document.getElementById("cadPdfStatus");
+  status.classList.remove("hidden","err","ok"); status.textContent = "Lendo PDF...";
+  try{
+    const pages = await extractPdfAllLines(f);
+    const allLines = pages.flat();
+    const parsed = parseFornecedoresPdf(allLines);
+    if(!parsed.length) throw new Error("Não consegui reconhecer nenhum fornecedor nesse PDF.");
+    let added=0, updated=0;
+    parsed.forEach(p=>{
+      if(!p.documento) return;
+      if(!clientesDB[p.documento]){
+        clientesDB[p.documento] = {documento:p.documento, tipo:p.tipo, razao_social:p.razao_social, endereco:p.endereco, municipio:p.municipio, uf:p.uf, cep:"", codigos:{}, fonte:"importado-pdf-sindicato"};
+        added++;
+      }
+      if(!clientesDB[p.documento].codigos) clientesDB[p.documento].codigos = {};
+      if(p.codigo && contasPagarState){
+        const chave = `${contasPagarState.empresaCnpj}_fornecedor`;
+        if(clientesDB[p.documento].codigos[chave] !== p.codigo){ clientesDB[p.documento].codigos[chave] = p.codigo; updated++; }
+      }
+    });
+    setClientesDB(clientesDB);
+    if(window.baixasCloud) window.baixasCloud.pushManyClientes(clientesDB);
+    markDropDone(d, `${parsed.length} fornecedores lidos (${added} novo(s), ${updated} código(s) atualizado(s))`);
+    status.classList.add("hidden");
+    if(baixaRowsState.length) renderBaixaTable();
+  }catch(err){
+    status.classList.remove("hidden"); status.classList.add("err"); status.textContent = "Erro: " + err.message;
+  }
+});
+
 renderPadroesPagTable();
+</script>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import { getFirestore, collection, doc, setDoc, onSnapshot, writeBatch } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+
+// Mesmo projeto Firebase e mesma collection "clientes" compartilhada com o resto do Hub
+// (Conversões Cibele, Baixas de Parcelas, Cadastro de Clientes e Fornecedores) — um só
+// cadastro de CNPJ pra todas as ferramentas do escritório.
+const firebaseConfig = {
+  apiKey: "AIzaSyCBIQkYYNt3K4gZ0OGqoqsU8Jnrsgxif5k",
+  authDomain: "conversoes-cibele.firebaseapp.com",
+  projectId: "conversoes-cibele",
+  storageBucket: "conversoes-cibele.firebasestorage.app",
+  messagingSenderId: "401784315449",
+  appId: "1:401784315449:web:5d459a524059c0978bb7e8"
+};
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const auth = getAuth(app);
+let ready = false, firstSnap = true;
+function setCloudBadge(text, cls){
+  const el = document.getElementById("cnpjCloudStatus");
+  if(!el) return;
+  el.textContent = text; el.className = "badge " + (cls||"info");
+}
+setCloudBadge("Conectando à nuvem…", "warn");
+signInAnonymously(auth).catch(err=>{ console.error("Firebase auth error", err); setCloudBadge("Nuvem indisponível — usando só este navegador", "err"); });
+onAuthStateChanged(auth, (user)=>{
+  if(!user) return;
+  ready = true;
+  onSnapshot(collection(db, "clientes"), (snap)=>{
+    const cloudData = {};
+    snap.forEach(d=> cloudData[d.id] = d.data());
+    if(firstSnap){
+      firstSnap = false;
+      const localOnly = {};
+      Object.keys(window.clientesDB||{}).forEach(k=>{ if(!cloudData[k]) localOnly[k]=window.clientesDB[k]; });
+      window.setClientesDB({...cloudData, ...localOnly});
+      if(Object.keys(localOnly).length) window.baixasCloud.pushManyClientes(localOnly);
+    } else {
+      window.setClientesDB(cloudData);
+    }
+    setCloudBadge("Sincronizado com a nuvem", "ok");
+    const resultBox = document.getElementById("resultBaixaCard");
+    if(resultBox && !resultBox.classList.contains("hidden") && window.renderBaixaTable) window.renderBaixaTable();
+  }, err=>{ console.error("clientes onSnapshot", err); setCloudBadge("Erro de sincronização", "err"); });
+});
+window.baixasCloud = {
+  pushManyClientes(obj){
+    if(!ready) return;
+    const keys = Object.keys(obj||{}); if(!keys.length) return;
+    const batch = writeBatch(db);
+    keys.forEach(k=> batch.set(doc(db,"clientes",k), obj[k]));
+    batch.commit().catch(e=>console.error("pushManyClientes",e));
+  }
+};
 </script>
 </body>
 </html>
