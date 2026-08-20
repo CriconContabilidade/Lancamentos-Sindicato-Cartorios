@@ -289,6 +289,17 @@ function normalizeText(s){
   return (s||"").toString().normalize("NFD").replace(/[̀-ͯ]/g,"").toUpperCase().trim();
 }
 function onlyDigits(s){ return (s||"").toString().replace(/\D/g,""); }
+// Máscara de data: só deixa digitar números, insere as barras sozinho (DD/MM/AAAA) conforme
+// digita. O campo seleciona tudo ao focar (maskDateFocus) pra que digitar de novo por cima
+// substitua o valor antigo em vez de inserir no meio dele.
+function maskDateInput(el){
+  const digits = el.value.replace(/\D/g,"").slice(0,8);
+  let out = digits;
+  if(digits.length>4) out = digits.slice(0,2)+"/"+digits.slice(2,4)+"/"+digits.slice(4);
+  else if(digits.length>2) out = digits.slice(0,2)+"/"+digits.slice(2);
+  el.value = out;
+}
+function maskDateFocus(el){ el.select(); }
 
 function wireDropzone(dropId, inputId, onFile){
   const drop = document.getElementById(dropId);
@@ -840,7 +851,7 @@ function renderTable(pagamentosSobrando, semPar){
       ? `<span class="status-icon warn" title="${(r.statusText||'').replace(/"/g,'&quot;')}">⚠</span>`
       : `<span class="status-icon ok" title="${(r.statusText||'').replace(/"/g,'&quot;')}">✓</span>`;
     html += `<tr class="${r.flag?'flag':''}">
-      <td class="cell"><input class="cell-input" value="${fmtDateBR(r.data)}" onchange="updateRow(${i},'data',this.value)"></td>
+      <td class="cell"><input class="cell-input" value="${fmtDateBR(r.data)}" inputmode="numeric" onfocus="maskDateFocus(this)" oninput="maskDateInput(this)" onchange="updateRow(${i},'data',this.value)"></td>
       <td class="cell"><input class="cell-input" style="width:60px" value="${r.debito??''}" onchange="updateRow(${i},'debito',this.value)"></td>
       <td class="cell"><input class="cell-input" style="width:60px" value="${r.credito??''}" onchange="updateRow(${i},'credito',this.value)"></td>
       <td class="cell"><input class="cell-input num" value="${fmtBRL(r.valor)}" onchange="updateRow(${i},'valor',this.value)"></td>
@@ -992,8 +1003,8 @@ function renderBaixaTable(){
       <td class="cell"><input class="cell-input" value="${r.numero}" onchange="updateBaixaRow(${i},'numero',this.value)"></td>
       <td class="cell"><input class="cell-input" style="width:140px;min-width:140px" value="${r.cnpj}" onchange="updateBaixaRow(${i},'cnpj',this.value)"></td>
       <td style="min-width:220px;white-space:nowrap;">${r.nome||""}</td>
-      <td class="cell"><input class="cell-input" value="${fmtDateBR(r.vencimento)}" onchange="updateBaixaRow(${i},'vencimento',this.value)"></td>
-      <td class="cell"><input class="cell-input" value="${fmtDateBR(r.databaixa)}" onchange="updateBaixaRow(${i},'databaixa',this.value)"></td>
+      <td class="cell"><input class="cell-input" value="${fmtDateBR(r.vencimento)}" inputmode="numeric" onfocus="maskDateFocus(this)" oninput="maskDateInput(this)" onchange="updateBaixaRow(${i},'vencimento',this.value)"></td>
+      <td class="cell"><input class="cell-input" value="${fmtDateBR(r.databaixa)}" inputmode="numeric" onfocus="maskDateFocus(this)" oninput="maskDateInput(this)" onchange="updateBaixaRow(${i},'databaixa',this.value)"></td>
       <td class="cell"><input class="cell-input num" value="${fmtBRL(r.valor)}" onchange="updateBaixaRow(${i},'valor',this.value)"></td>
       <td class="cell"><input class="cell-input num" value="${fmtBRL(r.juros)}" onchange="updateBaixaRow(${i},'juros',this.value)"></td>
       <td class="cell"><input class="cell-input num" value="${fmtBRL(r.multa)}" onchange="updateBaixaRow(${i},'multa',this.value)"></td>
