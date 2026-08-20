@@ -818,6 +818,9 @@ function updateRow(i, field, val){
 }
 function renderTable(pagamentosSobrando, semPar){
   const box = document.getElementById("resultCard");
+  const prevWrap = box.querySelector(".table-wrap");
+  const scrollTop = prevWrap ? prevWrap.scrollTop : 0;
+  const pageScrollY = window.scrollY;
   box.classList.remove("hidden");
   const rows = rowsState;
   const nFlag = rows.filter(r=>r.flag).length;
@@ -867,6 +870,9 @@ function renderTable(pagamentosSobrando, semPar){
   </div>
   <div id="exportStatus" class="status-line hidden"></div>`;
   box.innerHTML = html;
+  const newWrap = box.querySelector(".table-wrap");
+  if(newWrap) newWrap.scrollTop = scrollTop;
+  window.scrollTo(window.scrollX, pageScrollY);
 }
 const LANC_HEADER = ["Data","Débito","Crédito","Valor","Cód. Hist.","Complemento Histórico","Inicia Lote","Código Emp.","Centro de Custo Débito","Centro de Custo Crédito"];
 function rowArray(r){
@@ -976,6 +982,9 @@ function buildBaixaRow(titulo, dataBaixa, statusClass, statusText, incluir){
 }
 function renderBaixaTable(){
   const box = document.getElementById("resultBaixaCard");
+  const prevWrap = box.querySelector(".table-wrap");
+  const scrollTop = prevWrap ? prevWrap.scrollTop : 0;
+  const pageScrollY = window.scrollY;
   box.classList.remove("hidden");
   const rows = baixaRowsState;
   const nOk = rows.filter(r=>!r.statusClass).length;
@@ -1019,6 +1028,9 @@ function renderBaixaTable(){
   </div>
   <div id="baixaExportStatus" class="status-line hidden"></div>`;
   box.innerHTML = html;
+  const newWrap = box.querySelector(".table-wrap");
+  if(newWrap) newWrap.scrollTop = scrollTop;
+  window.scrollTo(window.scrollX, pageScrollY);
   document.getElementById("cnpjHelperCard").classList.toggle("hidden", nErr===0 || rows.every(r=>r.cnpj));
   document.getElementById("cnpjHelperEmpresa").textContent = `da empresa ${contasPagarState.empresaNome} (CNPJ ${contasPagarState.empresaCnpj})`;
 }
