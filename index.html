@@ -990,8 +990,8 @@ function renderBaixaTable(){
     html += `<tr class="${r.statusClass||''}">
       <td style="text-align:center"><input type="checkbox" ${r.incluir?'checked':''} onchange="updateBaixaRow(${i},'incluir',this.checked)"></td>
       <td class="cell"><input class="cell-input" value="${r.numero}" onchange="updateBaixaRow(${i},'numero',this.value)"></td>
-      <td class="cell"><input class="cell-input wide" value="${r.cnpj}" onchange="updateBaixaRow(${i},'cnpj',this.value)"></td>
-      <td>${r.nome||""}</td>
+      <td class="cell"><input class="cell-input" style="width:140px;min-width:140px" value="${r.cnpj}" onchange="updateBaixaRow(${i},'cnpj',this.value)"></td>
+      <td style="min-width:220px;white-space:nowrap;">${r.nome||""}</td>
       <td class="cell"><input class="cell-input" value="${fmtDateBR(r.vencimento)}" onchange="updateBaixaRow(${i},'vencimento',this.value)"></td>
       <td class="cell"><input class="cell-input" value="${fmtDateBR(r.databaixa)}" onchange="updateBaixaRow(${i},'databaixa',this.value)"></td>
       <td class="cell"><input class="cell-input num" value="${fmtBRL(r.valor)}" onchange="updateBaixaRow(${i},'valor',this.value)"></td>
