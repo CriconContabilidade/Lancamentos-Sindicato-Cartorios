@@ -799,19 +799,25 @@ function processar(){
         const sufixo = `CREDCREACONT. Nº ${contrato} PARC. Nº ${emp.parcela}/${emp.total}`;
         const diferenca = Math.round((l.valor - valorFixo)*100)/100;
         const diferencaNegativa = diferenca < 0;
+        const histPrincipal = `PAGAMENTO REF. EMPRESTIMO ${sufixo}`;
+        const statusOk = diferencaNegativa ? "Diferença negativa — confira o Valor Fixo cadastrado (a parcela só cresce, nunca diminui)" : "OK (empréstimo Credcrea — partida múltipla)";
+        // Partida múltipla (mesmo lote): dois débitos (parcela + correção monetária) e um
+        // único crédito no banco pelo valor total pago — "Inicia Lote" marca o começo, as
+        // linhas seguintes do mesmo lote não repetem a conta banco.
         rows.push({
-          data:l.data, debito:contaParcela, credito:contaBanco, valor:valorFixo,
-          hist:`PAGAMENTO REF. EMPRESTIMO ${sufixo}`, complemento:null, iniciaLote:1,
-          flag:diferencaNegativa,
-          statusText: diferencaNegativa ? "Diferença negativa — confira o Valor Fixo cadastrado (a parcela só cresce, nunca diminui)" : "OK (empréstimo Credcrea)",
-          origem:l.historico
+          data:l.data, debito:contaParcela, credito:null, valor:valorFixo,
+          hist:histPrincipal, complemento:null, iniciaLote:1,
+          flag:diferencaNegativa, statusText:statusOk, origem:l.historico
         });
         rows.push({
-          data:l.data, debito:contaCorrecao, credito:contaBanco, valor:diferenca,
+          data:l.data, debito:contaCorrecao, credito:null, valor:diferenca,
           hist:`CORRECAO MONETARIA EMPRESTIMO ${sufixo} 100% CDI`, complemento:null, iniciaLote:null,
-          flag:diferencaNegativa,
-          statusText: diferencaNegativa ? "Diferença negativa" : "OK (correção monetária)",
-          origem:l.historico
+          flag:diferencaNegativa, statusText:statusOk, origem:l.historico
+        });
+        rows.push({
+          data:l.data, debito:null, credito:contaBanco, valor:l.valor,
+          hist:histPrincipal, complemento:null, iniciaLote:null,
+          flag:diferencaNegativa, statusText:statusOk, origem:l.historico
         });
         return;
       }
