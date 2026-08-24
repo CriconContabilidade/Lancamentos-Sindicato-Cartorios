@@ -212,6 +212,13 @@ code{background:var(--paper);padding:1px 5px;border-radius:3px;font-family:'IBM 
       <div class="field"><label>Conta Contribuição Assistencial (recebimentos)</label><input id="contaContrib" value="97"></div>
       <div class="field"><label>Conta Aplicação Financeira</label><input id="contaAplicacao" value="108"></div>
     </div>
+    <div class="section-title" style="margin-top:6px;">Empréstimo Credcrea (reconhecido pelo histórico "PG. PARC. EMP" do extrato)</div>
+    <div class="field-row">
+      <div class="field"><label>Nº do Contrato</label><input id="empContrato" value="160026"></div>
+      <div class="field"><label>Valor Fixo da Parcela</label><input id="empValorFixo" value="1289,42"></div>
+      <div class="field"><label>Conta Parcela</label><input id="empContaParcela" value="216"></div>
+      <div class="field"><label>Conta Correção Monetária</label><input id="empContaCorrecao" value="222"></div>
+    </div>
   </div>
 
   <footer>Lançamentos Sindicato dos Cartórios · Cricon Contabilidade — uso interno</footer>
@@ -488,6 +495,17 @@ function buildRecebimentoHist(historico){
 // do prefixo DB./CR. usado pelo banco.
 function isAplicacaoFinanceira(historico){
   return /APL.{0,3}RDCPOS/i.test(historico.replace(/\s+/g,""));
+}
+
+// Empréstimo Credcrea — o próprio extrato já traz o número da parcela e o total no
+// histórico ("PG. PARC. EMP 003/060"), então não precisa incrementar/guardar a última
+// parcela como nos outros empréstimos do Hub. A parte fixa (juros/amortização) sempre vale o
+// mesmo valor; a diferença pro valor pago de verdade é a correção monetária do mês (100% CDI),
+// calculada — nunca cadastrada — pra fechar o lote certinho mesmo se o CDI variar.
+function matchEmprestimoCredcrea(historico){
+  const m = historico.match(/PG\.\s*PARC\.\s*EMP\s*0*(\d+)\s*\/\s*0*(\d+)/i);
+  if(!m) return null;
+  return { parcela: parseInt(m[1],10), total: parseInt(m[2],10) };
 }
 
 /* =========================================================================
@@ -770,6 +788,33 @@ function processar(){
         origem:l.historico
       });
       return;
+    }
+    if(l.tipo==="D"){
+      const emp = matchEmprestimoCredcrea(l.historico);
+      if(emp){
+        const contrato = document.getElementById("empContrato").value.trim();
+        const valorFixo = parseBRL(document.getElementById("empValorFixo").value);
+        const contaParcela = document.getElementById("empContaParcela").value.trim() || "216";
+        const contaCorrecao = document.getElementById("empContaCorrecao").value.trim() || "222";
+        const sufixo = `CREDCREACONT. Nº ${contrato} PARC. Nº ${emp.parcela}/${emp.total}`;
+        const diferenca = Math.round((l.valor - valorFixo)*100)/100;
+        const diferencaNegativa = diferenca < 0;
+        rows.push({
+          data:l.data, debito:contaParcela, credito:contaBanco, valor:valorFixo,
+          hist:`PAGAMENTO REF. EMPRESTIMO ${sufixo}`, complemento:null, iniciaLote:1,
+          flag:diferencaNegativa,
+          statusText: diferencaNegativa ? "Diferença negativa — confira o Valor Fixo cadastrado (a parcela só cresce, nunca diminui)" : "OK (empréstimo Credcrea)",
+          origem:l.historico
+        });
+        rows.push({
+          data:l.data, debito:contaCorrecao, credito:contaBanco, valor:diferenca,
+          hist:`CORRECAO MONETARIA EMPRESTIMO ${sufixo} 100% CDI`, complemento:null, iniciaLote:null,
+          flag:diferencaNegativa,
+          statusText: diferencaNegativa ? "Diferença negativa" : "OK (correção monetária)",
+          origem:l.historico
+        });
+        return;
+      }
     }
     if(l.tipo==="C"){
       const {hist, ok} = buildRecebimentoHist(l.historico);
