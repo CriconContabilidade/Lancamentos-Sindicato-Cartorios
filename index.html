@@ -144,11 +144,11 @@ code{background:var(--paper);padding:1px 5px;border-radius:3px;font-family:'IBM 
     <div class="field-row">
       <div class="field">
         <label>Extrato bancário (PDF — Credcrea)</label>
-        <div class="dropzone small-drop" id="extratoDrop"><div class="big">Arraste o PDF do extrato aqui</div><div class="small">.pdf</div><input type="file" id="extratoFile" accept="application/pdf"></div>
+        <div class="dropzone small-drop" id="extratoDrop"><div class="big">Arraste um ou mais PDFs de extrato aqui</div><div class="small">.pdf — pode soltar vários meses juntos</div><input type="file" id="extratoFile" accept="application/pdf" multiple></div>
       </div>
       <div class="field">
         <label>Planilha de fluxo de caixa (Excel)</label>
-        <div class="dropzone small-drop" id="excelDrop"><div class="big">Arraste a planilha de pagamentos aqui</div><div class="small">.xls ou .xlsx</div><input type="file" id="excelFile" accept=".xls,.xlsx"></div>
+        <div class="dropzone small-drop" id="excelDrop"><div class="big">Arraste uma ou mais planilhas aqui</div><div class="small">.xls ou .xlsx — pode soltar vários meses juntos</div><input type="file" id="excelFile" accept=".xls,.xlsx" multiple></div>
       </div>
     </div>
     <div id="uploadStatus" class="status-line hidden"></div>
@@ -734,13 +734,16 @@ rebuildCodigoIndex();
    ========================================================================= */
 let extratoState = null;
 let excelState = null;
-wireDropzone("extratoDrop","extratoFile", async (f,d)=>{
+wireDropzoneMulti("extratoDrop","extratoFile", async (files,d)=>{
   const status = document.getElementById("uploadStatus");
-  status.classList.remove("hidden","err"); status.textContent = "Lendo extrato...";
+  status.classList.remove("hidden","err"); status.textContent = "Lendo extrato(s)...";
   try{
-    extratoState = await parseExtratoCredcrea(f);
-    if(!extratoState.length) throw new Error("Não encontrei nenhum lançamento nesse extrato.");
-    markDropDone(d, `${f.name} (${extratoState.length} lançamento(s))`);
+    const linhas = [];
+    for(const f of files) linhas.push(...await parseExtratoCredcrea(f));
+    linhas.sort((a,b)=> partsToDate(a.data)-partsToDate(b.data));
+    extratoState = linhas;
+    if(!extratoState.length) throw new Error("Não encontrei nenhum lançamento nesse(s) extrato(s).");
+    markDropDone(d, `${files.length===1?files[0].name:files.length+" arquivo(s)"} (${extratoState.length} lançamento(s))`);
     status.classList.add("hidden");
   }catch(err){
     status.classList.remove("hidden"); status.classList.add("err"); status.textContent = "Erro no extrato: " + err.message;
@@ -748,13 +751,19 @@ wireDropzone("extratoDrop","extratoFile", async (f,d)=>{
   }
   atualizarBotaoProcessar();
 });
-wireDropzone("excelDrop","excelFile", async (f,d)=>{
+wireDropzoneMulti("excelDrop","excelFile", async (files,d)=>{
   const status = document.getElementById("uploadStatus");
-  status.classList.remove("hidden","err"); status.textContent = "Lendo planilha...";
+  status.classList.remove("hidden","err"); status.textContent = "Lendo planilha(s)...";
   try{
-    excelState = await parseExcelPagamentos(f);
-    if(!excelState.pagamentos.length && !excelState.semPar.length) throw new Error("Não encontrei nenhuma linha de pagamento nessa planilha.");
-    markDropDone(d, `${f.name} (${excelState.pagamentos.length} pagamento(s) unificado(s))`);
+    const pagamentos = [], semPar = [];
+    for(const f of files){
+      const parsed = await parseExcelPagamentos(f);
+      pagamentos.push(...parsed.pagamentos);
+      semPar.push(...parsed.semPar);
+    }
+    excelState = {pagamentos, semPar};
+    if(!excelState.pagamentos.length && !excelState.semPar.length) throw new Error("Não encontrei nenhuma linha de pagamento nessa(s) planilha(s).");
+    markDropDone(d, `${files.length===1?files[0].name:files.length+" arquivo(s)"} (${excelState.pagamentos.length} pagamento(s) unificado(s))`);
     status.classList.add("hidden");
   }catch(err){
     status.classList.remove("hidden"); status.classList.add("err"); status.textContent = "Erro na planilha: " + err.message;
