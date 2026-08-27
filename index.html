@@ -440,14 +440,16 @@ async function parseExtratoCredcrea(file){
   // O valor de débito sai do PDF com o sinal de menos colado no número (ex. "-1.503,10"),
   // então o grupo do valor precisa aceitar o "-" opcional — sem isso a linha inteira falha
   // no regex e é descartada, quebrando o saldoAnterior usado pra inferir crédito/débito
-  // das linhas seguintes (um recebimento real acaba virando "pagamento" por tabela).
-  const re = /^(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+(\d[\d.]*)\s+(-|-?[\d.]+,\d{2})\s+([\d.]+,\d{2})$/;
+  // das linhas seguintes (um recebimento real acaba virando "pagamento" por tabela). O
+  // mesmo vale pro SALDO: quando a conta fica negativa (ex. "-10,81"), sem aceitar o "-"
+  // aí também a linha some inteira e o saldo usado como referência fica desatualizado.
+  const re = /^(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+(\d[\d.]*)\s+(-|-?[\d.]+,\d{2})\s+(-?[\d.]+,\d{2})$/;
   const linhas = [];
   // "SALDO ANTERIOR" não tem data no início da linha, então nunca casa com `re` — precisa
   // ser lido à parte pra inicializar saldoAnterior. Sem isso, a primeira transação real do
   // extrato era usada só pra "descobrir" o saldo anterior e ficava fora do resultado (um
   // lançamento de verdade sumia todo mês, silenciosamente).
-  const reSaldoAnterior = /SALDO\s+ANTERIOR\s+([\d.]+,\d{2})/i;
+  const reSaldoAnterior = /SALDO\s+ANTERIOR\s+(-?[\d.]+,\d{2})/i;
   let saldoAnterior = null;
   const linhaSaldo = allLines.find(l=> reSaldoAnterior.test(l));
   if(linhaSaldo) saldoAnterior = parseBRL(linhaSaldo.match(reSaldoAnterior)[1]);
