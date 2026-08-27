@@ -397,14 +397,21 @@ function sortTh(stateVarName, state, col, label, rerenderFnName){
 async function extractPdfPageLines(pdf, pageNum){
   const page = await pdf.getPage(pageNum);
   const content = await page.getTextContent();
-  const rows = {};
-  content.items.forEach(it=>{
-    const y = Math.round(it.transform[5]);
-    if(!rows[y]) rows[y] = [];
-    rows[y].push({x:it.transform[4], text:it.str});
+  // Agrupa por Y com tolerância em vez de Math.round: no extrato da Credcrea a coluna
+  // DESCRIÇÃO fica numa linha-base ~0,3pt diferente do resto da linha (data/documento/
+  // valor/saldo), e um arredondamento exato ocasionalmente separa as duas em bins
+  // inteiros distintos, quebrando uma linha visual em duas linhas de texto.
+  const Y_TOL = 1.5;
+  const items = content.items.map(it=>({y:it.transform[5], x:it.transform[4], text:it.str}))
+    .sort((a,b)=> b.y-a.y);
+  const rows = [];
+  items.forEach(it=>{
+    let row = rows.find(r=> Math.abs(r.y - it.y) <= Y_TOL);
+    if(!row){ row = {y:it.y, items:[]}; rows.push(row); }
+    row.items.push(it);
   });
-  const ys = Object.keys(rows).map(Number).sort((a,b)=>b-a);
-  return ys.map(y=> rows[y].sort((a,b)=>a.x-b.x).map(t=>t.text).join(" ").replace(/\s+/g," ").trim() ).filter(l=>l.length>0);
+  rows.sort((a,b)=> b.y-a.y);
+  return rows.map(r=> r.items.sort((a,b)=>a.x-b.x).map(t=>t.text).join(" ").replace(/\s+/g," ").trim() ).filter(l=>l.length>0);
 }
 async function extractPdfAllLines(file){
   const buf = await file.arrayBuffer();
@@ -423,22 +430,36 @@ async function extractPdfAllLines(file){
 async function parseExtratoCredcrea(file){
   const pages = await extractPdfAllLines(file);
   const allLines = pages.flat();
-  const re = /^(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+(-|[\d.]+,\d{2})\s+([\d.]+,\d{2})$/;
+  // Coluna DOCUMENTO (número da transação, ex. "758613.350") vem sempre entre o histórico
+  // e o valor — só dígitos e pontos, nunca vírgula — e precisa ficar de fora do histórico
+  // (senão o nome de quem fez o PIX vem com o número da transação grudado no final).
+  // O valor de débito sai do PDF com o sinal de menos colado no número (ex. "-1.503,10"),
+  // então o grupo do valor precisa aceitar o "-" opcional — sem isso a linha inteira falha
+  // no regex e é descartada, quebrando o saldoAnterior usado pra inferir crédito/débito
+  // das linhas seguintes (um recebimento real acaba virando "pagamento" por tabela).
+  const re = /^(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+\d[\d.]*\s+(-|-?[\d.]+,\d{2})\s+([\d.]+,\d{2})$/;
   const linhas = [];
+  // "SALDO ANTERIOR" não tem data no início da linha, então nunca casa com `re` — precisa
+  // ser lido à parte pra inicializar saldoAnterior. Sem isso, a primeira transação real do
+  // extrato era usada só pra "descobrir" o saldo anterior e ficava fora do resultado (um
+  // lançamento de verdade sumia todo mês, silenciosamente).
+  const reSaldoAnterior = /SALDO\s+ANTERIOR\s+([\d.]+,\d{2})/i;
   let saldoAnterior = null;
+  const linhaSaldo = allLines.find(l=> reSaldoAnterior.test(l));
+  if(linhaSaldo) saldoAnterior = parseBRL(linhaSaldo.match(reSaldoAnterior)[1]);
   allLines.forEach(line=>{
     const m = line.match(re);
     if(!m) return;
     const [,dataStr,historico,valorStr,saldoStr] = m;
     const saldoAtual = parseBRL(saldoStr);
     const histTrim = historico.trim();
-    if(saldoAnterior===null || /^SALDO/i.test(histTrim)){
-      // primeira linha do extrato ("SALDO ANTERIOR") ou qualquer outra linha de saldo —
-      // não é lançamento, só serve de referência pro saldo anterior da próxima linha.
+    if(saldoAnterior===null){
+      // extrato sem "SALDO ANTERIOR" legível — sem referência pra inferir C/D da primeira
+      // linha, então ela só inicializa o saldo (comportamento antigo, como último recurso).
       saldoAnterior = saldoAtual;
       return;
     }
-    const valor = parseBRL(valorStr);
+    const valor = Math.abs(parseBRL(valorStr));
     const tipo = saldoAtual > saldoAnterior ? "C" : "D";
     const [dd,mm,yyyy] = dataStr.split("/");
     linhas.push({data:{y:parseInt(yyyy),m:parseInt(mm),d:parseInt(dd)}, historico:histTrim, valor, tipo});
