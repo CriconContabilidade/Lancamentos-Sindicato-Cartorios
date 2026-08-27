@@ -916,7 +916,7 @@ function processar(){
       } else {
         rows.push({
           data:l.data, debito:contaFallback, credito:contaBanco, valor:l.valor,
-          hist: pago ? pago.historico : histFallback, complemento:null, iniciaLote:1,
+          hist: pago ? pago.historico : `${histFallback} - ${l.historico}`, complemento:null, iniciaLote:1,
           flag:true, incluir:true,
           statusText: pago ? `Sem padrão cadastrado — lançado em ${contaFallback}, confira a conta antes de exportar` : `Sem padrão nem correspondência na planilha — lançado em ${contaFallback} (${histFallback})`,
           origem:l.historico
