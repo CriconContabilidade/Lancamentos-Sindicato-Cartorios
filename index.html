@@ -194,6 +194,10 @@ code{background:var(--paper);padding:1px 5px;border-radius:3px;font-family:'IBM 
   <div class="card">
     <div class="section-title">Cadastro — Pagamentos Recorrentes</div>
     <div class="help">Reconhece pagamentos pela palavra-chave e já preenche a conta Débito e o histórico. Pode cadastrar <b>mais de uma palavra separada por ponto-e-vírgula</b> — todas precisam aparecer no texto, em qualquer ordem e com qualquer coisa entre elas, sem precisar ser a frase exata. Ex.: <code>NEGOCIACAO;GAROPABA</code> casa tanto "NEGOCIAÇÃO COM O PATRONAL GAROPABA" quanto "NEGOCIAÇÃO COM O PATRONAL DE GAROPABA". "Origem" define onde procurar: <b>Planilha</b> busca no histórico já unificado da planilha de fluxo de caixa (ex. nome do favorecido); <b>Extrato</b> busca direto no histórico do extrato bancário (ex. "DB. COTAS", que não aparece na planilha). Use <code>{CH}</code> no modelo de histórico onde quiser o número do cheque — ele é extraído automaticamente do texto "CH Nº ..." da planilha; se não achar, o trecho <code>{CH}</code> é removido. Pagamentos que não baterem com nenhum padrão nem com a planilha caem na conta de fallback abaixo, marcados pra revisão.</div>
+    <div class="table-toolbar">
+      <input type="search" id="padroesPagFiltro" placeholder="Filtrar por palavra-chave, conta ou histórico..." oninput="padroesPagTableState.filter=this.value; renderPadroesPagTable();">
+      <span class="count" id="padroesPagCount"></span>
+    </div>
     <div class="table-wrap"><table class="preview" id="padroesPagTable"></table></div>
     <div class="btn-row">
       <button class="btn small ghost" onclick="addPadraoPagRow()">+ Novo padrão</button>
@@ -437,7 +441,7 @@ async function parseExtratoCredcrea(file){
   // então o grupo do valor precisa aceitar o "-" opcional — sem isso a linha inteira falha
   // no regex e é descartada, quebrando o saldoAnterior usado pra inferir crédito/débito
   // das linhas seguintes (um recebimento real acaba virando "pagamento" por tabela).
-  const re = /^(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+\d[\d.]*\s+(-|-?[\d.]+,\d{2})\s+([\d.]+,\d{2})$/;
+  const re = /^(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+(\d[\d.]*)\s+(-|-?[\d.]+,\d{2})\s+([\d.]+,\d{2})$/;
   const linhas = [];
   // "SALDO ANTERIOR" não tem data no início da linha, então nunca casa com `re` — precisa
   // ser lido à parte pra inicializar saldoAnterior. Sem isso, a primeira transação real do
@@ -450,7 +454,7 @@ async function parseExtratoCredcrea(file){
   allLines.forEach(line=>{
     const m = line.match(re);
     if(!m) return;
-    const [,dataStr,historico,valorStr,saldoStr] = m;
+    const [,dataStr,historico,documento,valorStr,saldoStr] = m;
     const saldoAtual = parseBRL(saldoStr);
     const histTrim = historico.trim();
     if(saldoAnterior===null){
@@ -462,7 +466,7 @@ async function parseExtratoCredcrea(file){
     const valor = Math.abs(parseBRL(valorStr));
     const tipo = saldoAtual > saldoAnterior ? "C" : "D";
     const [dd,mm,yyyy] = dataStr.split("/");
-    linhas.push({data:{y:parseInt(yyyy),m:parseInt(mm),d:parseInt(dd)}, historico:histTrim, valor, tipo});
+    linhas.push({data:{y:parseInt(yyyy),m:parseInt(mm),d:parseInt(dd)}, historico:histTrim, documento, valor, tipo});
     saldoAnterior = saldoAtual;
   });
   return linhas;
@@ -514,7 +518,17 @@ async function parseExcelPagamentos(file){
   pendentesEntrada.forEach(p=> semPar.push({...p, tipo:"entrada sem saída correspondente"}));
   return { pagamentos, semPar };
 }
-function matchPagamentoExcel(pagamentosExcel, valor){
+// Casa por valor (FIFO) por padrão. Quando dá pra extrair o nº do cheque do próprio
+// extrato (linhas "CHEQUE"/"CHEQUE COMP.", onde a coluna DOCUMENTO vem como "298.4" —
+// 298 é o nº do cheque), casa primeiro por esse número contra o "CH Nº 298" da planilha:
+// casar só por valor faz um cheque "roubar" o pareamento de outro de mesmo valor
+// (ex. dois cheques de R$ 900,00 em meses diferentes), deixando o de verdade sem
+// descrição da planilha e sem padrão pra reconhecer.
+function matchPagamentoExcel(pagamentosExcel, valor, chNumero){
+  if(chNumero){
+    const idxCh = pagamentosExcel.findIndex(p=> !p.usado && extractChNumero(p.historico)===chNumero);
+    if(idxCh>=0){ pagamentosExcel[idxCh].usado = true; return pagamentosExcel[idxCh]; }
+  }
   const idx = pagamentosExcel.findIndex(p=> !p.usado && Math.abs(p.valor - valor) < 0.005);
   if(idx<0) return null;
   pagamentosExcel[idx].usado = true;
@@ -583,12 +597,16 @@ function loadPadroesPag(){
 }
 function savePadroesPag(list){ localStorage.setItem("sindicato_padroes_pagamento", JSON.stringify(list)); }
 let padroesPagDB = loadPadroesPag();
+let padroesPagTableState = makeTableState();
 function renderPadroesPagTable(){
   const tbl = document.getElementById("padroesPagTable");
+  const indexed = filterSortRows(padroesPagDB, padroesPagTableState, p=>[p.keyword,p.origem,p.debito,p.hist]);
+  const countEl = document.getElementById("padroesPagCount");
+  if(countEl) countEl.textContent = indexed.length===padroesPagDB.length ? `${padroesPagDB.length} padrão(ões)` : `${indexed.length} de ${padroesPagDB.length}`;
   tbl.innerHTML = `<thead><tr>
       <th>Palavra-chave</th><th>Origem</th><th>Débito</th><th>Modelo de Histórico</th><th>Ignorar</th><th></th>
     </tr></thead><tbody>` +
-    padroesPagDB.map((p,i)=>`<tr>
+    indexed.map(({row:p, idx:i})=>`<tr>
       <td class="cell"><input class="cell-input wide" placeholder="ex.: NEGOCIACAO;GAROPABA" value="${p.keyword||''}" onchange="updatePadraoPag(${i},'keyword',this.value)"></td>
       <td class="cell">
         <select class="cell-input" onchange="updatePadraoPag(${i},'origem',this.value)">
@@ -894,7 +912,8 @@ function processar(){
         origem:l.historico
       });
     } else {
-      const pago = matchPagamentoExcel(pagamentosExcel, l.valor);
+      const chNumero = /^CHEQUE\b/i.test(l.historico) ? (l.documento||"").split(".")[0] || null : null;
+      const pago = matchPagamentoExcel(pagamentosExcel, l.valor, chNumero);
       const padrao = matchPadraoPagamento(pago ? pago.historico : null, l.historico);
       const contaFallback = document.getElementById("contaFallback").value.trim() || "165";
       const histFallback = document.getElementById("histFallback").value.trim() || "VALORES A CLASSIFICAR";
@@ -914,9 +933,12 @@ function processar(){
           origem:l.historico
         });
       } else {
+        // Se o usuário customizou o histórico de fallback com "{CH}", resolve com o nº do
+        // cheque (do extrato ou da planilha, o que tiver) em vez de deixar o texto cru.
+        const histFallbackResolvido = resolvePadraoPagHist(histFallback, chNumero || extractChNumero(pago ? pago.historico : null));
         rows.push({
           data:l.data, debito:contaFallback, credito:contaBanco, valor:l.valor,
-          hist: pago ? pago.historico : `${histFallback} - ${l.historico}`, complemento:null, iniciaLote:1,
+          hist: pago ? pago.historico : `${histFallbackResolvido} - ${l.historico}`, complemento:null, iniciaLote:1,
           flag:true, incluir:true,
           statusText: pago ? `Sem padrão cadastrado — lançado em ${contaFallback}, confira a conta antes de exportar` : `Sem padrão nem correspondência na planilha — lançado em ${contaFallback} (${histFallback})`,
           origem:l.historico
