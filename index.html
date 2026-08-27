@@ -94,6 +94,7 @@ table.preview th.sortable .arrow{color:var(--accent);}
 table.preview td{padding:6px 8px;border-bottom:1px solid var(--rule);vertical-align:top;}
 table.preview td.num{text-align:right;font-family:'IBM Plex Mono',monospace;white-space:nowrap;}
 table.preview tr.flag{background:var(--amber-bg);}
+table.preview tr.excluded{opacity:.45;}
 table.preview tr.warn{background:var(--amber-bg);}
 table.preview tr.err{background:var(--red-bg);}
 .dropzone.small-drop{padding:16px;}
@@ -564,7 +565,7 @@ let padroesPagDB = loadPadroesPag();
 function renderPadroesPagTable(){
   const tbl = document.getElementById("padroesPagTable");
   tbl.innerHTML = `<thead><tr>
-      <th>Palavra-chave</th><th>Origem</th><th>Débito</th><th>Modelo de Histórico</th><th></th>
+      <th>Palavra-chave</th><th>Origem</th><th>Débito</th><th>Modelo de Histórico</th><th>Ignorar</th><th></th>
     </tr></thead><tbody>` +
     padroesPagDB.map((p,i)=>`<tr>
       <td class="cell"><input class="cell-input wide" placeholder="ex.: NEGOCIACAO;GAROPABA" value="${p.keyword||''}" onchange="updatePadraoPag(${i},'keyword',this.value)"></td>
@@ -574,17 +575,20 @@ function renderPadroesPagTable(){
           <option value="extrato" ${p.origem==='extrato'?'selected':''}>Extrato</option>
         </select>
       </td>
-      <td class="cell"><input class="cell-input" style="width:70px" value="${p.debito??''}" onchange="updatePadraoPag(${i},'debito',this.value)"></td>
-      <td class="cell"><input class="cell-input wide" value="${p.hist||''}" onchange="updatePadraoPag(${i},'hist',this.value)"></td>
+      <td class="cell"><input class="cell-input" style="width:70px" value="${p.debito??''}" ${p.ignorar?'disabled placeholder="—"':''} onchange="updatePadraoPag(${i},'debito',this.value)"></td>
+      <td class="cell"><input class="cell-input wide" value="${p.hist||''}" ${p.ignorar?'disabled placeholder="—"':''} onchange="updatePadraoPag(${i},'hist',this.value)"></td>
+      <td class="cell" style="text-align:center"><input type="checkbox" ${p.ignorar?'checked':''} onchange="updatePadraoPag(${i},'ignorar',this.checked)"></td>
       <td><button class="btn small ghost" onclick="removePadraoPagRow(${i})">✕</button></td>
     </tr>`).join("") + `</tbody>`;
 }
 function updatePadraoPag(i, field, val){
   if(field==="debito"){ padroesPagDB[i].debito = String(val).trim()===""?null:Number(val); }
+  else if(field==="ignorar"){ padroesPagDB[i].ignorar = val; }
   else { padroesPagDB[i][field] = val; }
   savePadroesPag(padroesPagDB);
+  if(field==="ignorar") renderPadroesPagTable();
 }
-function addPadraoPagRow(){ padroesPagDB.push({keyword:"",origem:"excel",debito:null,hist:""}); savePadroesPag(padroesPagDB); renderPadroesPagTable(); }
+function addPadraoPagRow(){ padroesPagDB.push({keyword:"",origem:"excel",debito:null,hist:"",ignorar:false}); savePadroesPag(padroesPagDB); renderPadroesPagTable(); }
 function removePadraoPagRow(i){ padroesPagDB.splice(i,1); savePadroesPag(padroesPagDB); renderPadroesPagTable(); }
 
 function extractChNumero(texto){
@@ -615,6 +619,7 @@ function matchPadraoPagamento(histExcel, historicoExtrato){
     if(!p.keyword) continue;
     const alvo = p.origem === "extrato" ? historicoExtrato : histExcel;
     if(matchKeyword(p.keyword, alvo)){
+      if(p.ignorar) return { ignorar:true };
       const chNumero = extractChNumero(histExcel);
       return { debito: p.debito, hist: resolvePadraoPagHist(p.hist, chNumero) };
     }
@@ -863,7 +868,7 @@ function processar(){
       rows.push({
         data:l.data, debito:contaBanco, credito:contaContrib, valor:l.valor,
         hist: hist, complemento: ok ? null : l.historico, iniciaLote:1,
-        flag: !ok,
+        flag: !ok, incluir:true,
         statusText: ok ? "OK (recebimento)" : "Padrão de recebimento não reconhecido — confira/edite o histórico",
         origem:l.historico
       });
@@ -872,18 +877,26 @@ function processar(){
       const padrao = matchPadraoPagamento(pago ? pago.historico : null, l.historico);
       const contaFallback = document.getElementById("contaFallback").value.trim() || "165";
       const histFallback = document.getElementById("histFallback").value.trim() || "VALORES A CLASSIFICAR";
-      if(padrao && padrao.debito!=null){
+      if(padrao && padrao.ignorar){
+        rows.push({
+          data:l.data, debito:null, credito:contaBanco, valor:l.valor,
+          hist: l.historico, complemento:null, iniciaLote:1,
+          flag:false, incluir:false,
+          statusText:"Ignorado (padrão marcado como \"Ignorar\") — desmarcado da exportação",
+          origem:l.historico
+        });
+      } else if(padrao && padrao.debito!=null){
         rows.push({
           data:l.data, debito:padrao.debito, credito:contaBanco, valor:l.valor,
           hist: padrao.hist, complemento:null, iniciaLote:1,
-          flag:false, statusText:"OK (padrão de pagamento cadastrado)",
+          flag:false, incluir:true, statusText:"OK (padrão de pagamento cadastrado)",
           origem:l.historico
         });
       } else {
         rows.push({
           data:l.data, debito:contaFallback, credito:contaBanco, valor:l.valor,
           hist: pago ? pago.historico : histFallback, complemento:null, iniciaLote:1,
-          flag:true,
+          flag:true, incluir:true,
           statusText: pago ? `Sem padrão cadastrado — lançado em ${contaFallback}, confira a conta antes de exportar` : `Sem padrão nem correspondência na planilha — lançado em ${contaFallback} (${histFallback})`,
           origem:l.historico
         });
@@ -900,6 +913,7 @@ function updateRow(i, field, val){
   else if(field==="valor"){ const n=parseBRL(val); if(n!=null) r.valor=n; }
   else if(field==="debito" || field==="credito"){ r[field] = String(val).trim()===""?null:val.trim(); }
   else if(field==="hist"){ r.hist = val; r.complemento = null; }
+  else if(field==="incluir"){ r.incluir = !!val; }
   if(r.debito!=null && r.credito!=null && (r.hist || r.complemento)) r.flag = false;
   renderTable();
 }
@@ -911,13 +925,15 @@ function renderTable(pagamentosSobrando, semPar){
   box.classList.remove("hidden");
   const rows = rowsState;
   const nFlag = rows.filter(r=>r.flag).length;
+  const nExcl = rows.filter(r=>r.incluir===false).length;
   const indexed = filterSortRows(rows, tableState, r=>[r.debito,r.credito,r.hist,r.complemento,r.origem]);
   let html = `<div class="section-title">Lançamentos do mês</div>
   <div class="summary-row">
     <div class="item"><div class="k">Linhas</div><div class="v">${rows.length}</div></div>
     <div class="item"><div class="k">Pra completar</div><div class="v">${nFlag}</div></div>
+    <div class="item"><div class="k">Excluídas (ignoradas)</div><div class="v">${nExcl}</div></div>
   </div>
-  <div class="help">Linhas em amarelo precisam de atenção: pagamentos sempre vêm com a conta <b>Débito em branco</b> pra você completar à mão; recebimentos só ficam marcados se o histórico do extrato não bateu com nenhum padrão conhecido. Edite qualquer campo clicando nele.</div>`;
+  <div class="help">Linhas em amarelo precisam de atenção: pagamentos sempre vêm com a conta <b>Débito em branco</b> pra você completar à mão; recebimentos só ficam marcados se o histórico do extrato não bateu com nenhum padrão conhecido. Edite qualquer campo clicando nele. Desmarque a caixinha pra excluir uma linha da exportação sem apagá-la (ex.: padrão marcado como "Ignorar").</div>`;
   if(pagamentosSobrando && pagamentosSobrando.length){
     html += `<div class="status-line err">Atenção: ${pagamentosSobrando.length} pagamento(s) da planilha não encontraram um débito de valor igual no extrato — confira se o valor foi lançado certo: ${pagamentosSobrando.map(p=>`${fmtBRL(p.valor)} (${p.historico})`).join("; ")}</div>`;
   }
@@ -930,6 +946,7 @@ function renderTable(pagamentosSobrando, semPar){
     <span class="count">${indexed.length===rows.length?`${rows.length} linha(s)`:`${indexed.length} de ${rows.length}`}</span>
   </div>
   <div class="table-wrap"><table class="preview"><thead><tr>
+    <th></th>
     ${sortTh('tableState',tableState,'data','Data','renderTable')}
     ${sortTh('tableState',tableState,'debito','Débito','renderTable')}
     ${sortTh('tableState',tableState,'credito','Crédito','renderTable')}
@@ -937,10 +954,12 @@ function renderTable(pagamentosSobrando, semPar){
     <th class="status-th" title="Passe o mouse pra ver o detalhe">Status</th><th>Histórico</th><th>Origem (extrato)</th>
   </tr></thead><tbody>`;
   indexed.forEach(({row:r, idx:i})=>{
+    const incluida = r.incluir!==false;
     const statusIcon = r.flag
       ? `<span class="status-icon warn" title="${(r.statusText||'').replace(/"/g,'&quot;')}">⚠</span>`
       : `<span class="status-icon ok" title="${(r.statusText||'').replace(/"/g,'&quot;')}">✓</span>`;
-    html += `<tr class="${r.flag?'flag':''}">
+    html += `<tr class="${!incluida?'excluded':(r.flag?'flag':'')}">
+      <td class="cell" style="text-align:center"><input type="checkbox" ${incluida?'checked':''} onchange="updateRow(${i},'incluir',this.checked)"></td>
       <td class="cell"><input class="cell-input" value="${fmtDateBR(r.data)}" inputmode="numeric" onfocus="maskDateFocus(this)" oninput="maskDateInput(this)" onchange="updateRow(${i},'data',this.value)"></td>
       <td class="cell"><input class="cell-input" style="width:60px" value="${r.debito??''}" onchange="updateRow(${i},'debito',this.value)"></td>
       <td class="cell"><input class="cell-input" style="width:60px" value="${r.credito??''}" onchange="updateRow(${i},'credito',this.value)"></td>
@@ -972,18 +991,21 @@ function setExportStatus(msg, cls){
   el.textContent = msg; el.className = "status-line" + (cls?(" "+cls):"");
   el.classList.remove("hidden");
 }
+function rowsParaExportar(){ return rowsState.filter(r=>r.incluir!==false); }
 function downloadXlsxLanc(){
-  downloadXlsx("lancamentos.xlsx", [LANC_HEADER, ...rowsState.map(rowArray)], "Lancamentos");
-  setExportStatus(`${rowsState.length} lançamento(s) exportado(s).`, "ok");
+  const rows = rowsParaExportar();
+  downloadXlsx("lancamentos.xlsx", [LANC_HEADER, ...rows.map(rowArray)], "Lancamentos");
+  setExportStatus(`${rows.length} lançamento(s) exportado(s).`, "ok");
 }
 function downloadTxtLanc(){
-  const pendentes = rowsState.filter(r=>r.flag);
+  const rows = rowsParaExportar();
+  const pendentes = rows.filter(r=>r.flag);
   if(pendentes.length){
     if(!confirm(`${pendentes.length} linha(s) ainda marcada(s) pra completar (conta Débito em branco ou histórico sem correspondência). Gerar mesmo assim?`)) return;
   }
-  const lines = rowsState.map(r=> rowArray(r).map((v,i)=> i===3 ? fmtValorTxt(v) : (i===5 ? stripAccents(v) : v)).join(";"));
+  const lines = rows.map(r=> rowArray(r).map((v,i)=> i===3 ? fmtValorTxt(v) : (i===5 ? stripAccents(v) : v)).join(";"));
   downloadTextAnsi("lanctos.txt", lines.join("\r\n") + "\r\n");
-  setExportStatus(`${rowsState.length} lançamento(s) exportado(s) em lanctos.txt.`, "ok");
+  setExportStatus(`${rows.length} lançamento(s) exportado(s) em lanctos.txt.`, "ok");
 }
 
 /* =========================================================================
