@@ -140,7 +140,8 @@ code{background:var(--paper);padding:1px 5px;border-radius:3px;font-family:'IBM 
     <div class="help">
       <b>Recebimentos</b> — toda entrada do extrato vira lançamento Débito Banco / Crédito conta de Contribuição Assistencial. Quando o PIX/TED do extrato traz o nome de quem transferiu, o histórico vira <code>RECEBIMENTO REF. CONTRIBUICAO ASSISTENCIAL - &lt;NOME&gt;</code>; quando é só "DEPOSITO" ou "CR.DEP.INTERC" (sem nome), vira <code>RECEBIMENTO REF. DEPOSITO DE CONTRIBUIÇÃO ASSISTENCIAL EM ESPÉCIE</code>.<br>
       <b>Pagamentos</b> — toda saída do extrato vira lançamento com Crédito Banco. A conta Débito e o histórico são resolvidos pelo cadastro de padrões (configuração no rodapé da página): primeiro tenta casar o histórico já unificado da planilha (ou o histórico cru do extrato) com uma palavra-chave cadastrada; sem padrão cadastrado, cai na conta de fallback marcada pra revisão. Cada pagamento aparece na planilha em <b>duas linhas</b> (uma "entrada" que autoriza o cheque, e a "saída" do cheque em si) — a ferramenta une as duas num histórico só, em caixa alta, e casa com a linha do extrato pelo valor.<br>
-      <b>Aplicação financeira</b> — linhas de aplicação/resgate no extrato (ex. "DB.APL.RDCPOS"/"CR.APL.RDCPOS") usam sempre a mesma conta (108) nos dois lados: débito quando o dinheiro sai pra aplicar (<code>VALOR REF. APLICAÇÃO FINANCEIRA</code>), crédito quando volta no resgate (<code>VALOR REF. RESGATE DE APLICAÇÃO FINANCEIRA</code>) — reconhecidas automaticamente, sem precisar completar nada.
+      <b>Aplicação financeira</b> — linhas de aplicação/resgate no extrato (ex. "DB.APL.RDCPOS"/"CR.APL.RDCPOS") usam sempre a mesma conta (108) nos dois lados: débito quando o dinheiro sai pra aplicar (<code>VALOR REF. APLICAÇÃO FINANCEIRA</code>), crédito quando volta no resgate (<code>VALOR REF. RESGATE DE APLICAÇÃO FINANCEIRA</code>) — reconhecidas automaticamente, sem precisar completar nada.<br>
+      <b>Provisão de rendimento</b> (opcional) — solte também o <b>Demonstrativo de Aplicações</b> (relatório mensal da Ailos com o rendimento provisionado de todas as aplicações). Pra cada mês presente no(s) extrato(s) acima, lança <code>D 108 / C 56 — VALOR REF. RENDIMENTOS DE APLICAÇÃO FINANCEIRA NO MÊS MM/AAAA</code> no último dia útil do mês, usando o valor da linha "PROVISAO" da seção "Total" do relatório (nunca RESGATE/REVERSÃO/RENDIMENTO realizado — só a provisão). Sem nenhum extrato solto, lança a provisão de <b>todos</b> os meses que o relatório trouxer de uma vez (uso retroativo/inicial); com extrato, lança só o(s) mês(es) dele, pra não duplicar quando o relatório for enviado de novo no mês seguinte.
     </div>
     <div class="field-row">
       <div class="field">
@@ -150,6 +151,10 @@ code{background:var(--paper);padding:1px 5px;border-radius:3px;font-family:'IBM 
       <div class="field">
         <label>Planilha de fluxo de caixa (Excel)</label>
         <div class="dropzone small-drop" id="excelDrop"><div class="big">Arraste uma ou mais planilhas aqui</div><div class="small">.xls ou .xlsx — pode soltar vários meses juntos</div><input type="file" id="excelFile" accept=".xls,.xlsx" multiple></div>
+      </div>
+      <div class="field">
+        <label>Demonstrativo de Aplicações (PDF, opcional)</label>
+        <div class="dropzone small-drop" id="demonstrativoDrop"><div class="big">Arraste o(s) PDF(s) aqui</div><div class="small">Provisão de rendimento — só se quiser lançar</div><input type="file" id="demonstrativoFile" accept="application/pdf" multiple></div>
       </div>
     </div>
     <div id="uploadStatus" class="status-line hidden"></div>
@@ -216,6 +221,7 @@ code{background:var(--paper);padding:1px 5px;border-radius:3px;font-family:'IBM 
       <div class="field"><label>Conta Banco</label><input id="contaBanco" value="10"></div>
       <div class="field"><label>Conta Contribuição Assistencial (recebimentos)</label><input id="contaContrib" value="97"></div>
       <div class="field"><label>Conta Aplicação Financeira</label><input id="contaAplicacao" value="108"></div>
+      <div class="field"><label>Conta Rendimento de Aplicação (crédito da provisão)</label><input id="contaRendimento" value="56"></div>
     </div>
     <div class="section-title" style="margin-top:6px;">Empréstimo Credcrea (reconhecido pelo histórico "PG. PARC. EMP" do extrato)</div>
     <div class="field-row">
@@ -472,6 +478,44 @@ async function parseExtratoCredcrea(file){
     saldoAnterior = saldoAtual;
   });
   return linhas;
+}
+
+/* =========================================================================
+   DEMONSTRATIVO DE APLICAÇÕES (Ailos) — só a linha PROVISAO da seção "Total"
+   no fim do relatório interessa (a soma de todas as aplicações do sindicato,
+   mês a mês); RESGATE/REVERSAO/RENDIMENTO realizado não entram aqui porque o
+   resgate já vira lançamento pelo extrato (ver isAplicacaoFinanceira).
+   ========================================================================= */
+const MESES_PT = {JAN:1,FEV:2,MAR:3,ABR:4,MAI:5,JUN:6,JUL:7,AGO:8,SET:9,OUT:10,NOV:11,DEZ:12};
+async function parseDemonstrativoAplicacoes(file){
+  const pages = await extractPdfAllLines(file);
+  const allLines = pages.flat();
+  const idxTotal = allLines.findIndex(l=> l.trim()==="Total");
+  if(idxTotal<0) throw new Error('Não encontrei a seção "Total" nesse relatório — confira se é o Demonstrativo de Aplicações certo.');
+  const depoisTotal = allLines.slice(idxTotal+1);
+  const linhaMeses = depoisTotal.find(l=> /^[A-ZÇ]{3}\/\d{4}\b/.test(l.trim()));
+  if(!linhaMeses) throw new Error("Não encontrei a linha de meses na seção Total desse relatório.");
+  const meses = linhaMeses.trim().split(/\s+/)
+    .filter(t=> /^[A-Z]{3}\/\d{4}$/.test(t))
+    .map(t=>{ const [abv,ano] = t.split("/"); return {y:parseInt(ano), m:MESES_PT[abv.toUpperCase()]}; })
+    .filter(mes=> mes.m!=null);
+  const linhaProvisao = depoisTotal.find(l=> /^PROVISAO\b/i.test(l.trim()));
+  if(!linhaProvisao) throw new Error("Não encontrei a linha PROVISAO na seção Total desse relatório.");
+  const valores = linhaProvisao.trim().split(/\s+/).slice(1);
+  const porMes = [];
+  meses.forEach((mes,i)=>{
+    const valor = parseBRL(valores[i]);
+    if(valor==null) return; // "-" = mês fora do período do relatório, ainda não fechou
+    porMes.push({y:mes.y, m:mes.m, valor});
+  });
+  return porMes;
+}
+// Último dia útil do mês m/ano y (m 1-indexado) — só considera fim de semana, sem
+// calendário de feriados (nenhuma outra ferramenta do Hub tem essa base hoje).
+function ultimoDiaUtil(y, m){
+  const d = new Date(Date.UTC(y, m, 0));
+  while(d.getUTCDay()===0 || d.getUTCDay()===6) d.setUTCDate(d.getUTCDate()-1);
+  return {y:d.getUTCFullYear(), m:d.getUTCMonth()+1, d:d.getUTCDate()};
 }
 
 /* =========================================================================
@@ -844,8 +888,25 @@ wireDropzoneMulti("excelDrop","excelFile", async (files,d)=>{
   }
   atualizarBotaoProcessar();
 });
+let demonstrativoState = null;
+wireDropzoneMulti("demonstrativoDrop","demonstrativoFile", async (files,d)=>{
+  const status = document.getElementById("uploadStatus");
+  status.classList.remove("hidden","err"); status.textContent = "Lendo demonstrativo(s) de aplicações...";
+  try{
+    const porMes = [];
+    for(const f of files) porMes.push(...await parseDemonstrativoAplicacoes(f));
+    demonstrativoState = porMes;
+    if(!demonstrativoState.length) throw new Error("Não encontrei nenhum mês com valor de PROVISAO nesse(s) relatório(s).");
+    markDropDone(d, `${files.length===1?files[0].name:files.length+" arquivo(s)"} (${demonstrativoState.length} mês(es) com provisão)`);
+    status.classList.add("hidden");
+  }catch(err){
+    status.classList.remove("hidden"); status.classList.add("err"); status.textContent = "Erro no demonstrativo: " + err.message;
+    demonstrativoState = null;
+  }
+  atualizarBotaoProcessar();
+});
 function atualizarBotaoProcessar(){
-  document.getElementById("processBtn").disabled = !(extratoState && excelState);
+  document.getElementById("processBtn").disabled = !((extratoState && excelState) || (demonstrativoState && demonstrativoState.length));
 }
 
 let rowsState = [];
@@ -854,8 +915,10 @@ function processar(){
   const contaBanco = document.getElementById("contaBanco").value.trim() || "10";
   const contaContrib = document.getElementById("contaContrib").value.trim() || "97";
   const contaAplicacao = document.getElementById("contaAplicacao").value.trim() || "108";
-  const pagamentosExcel = excelState.pagamentos.map(p=>({...p, usado:false}));
   const rows = [];
+  let pagamentosSobrando = [], semPar = [];
+  if(extratoState && excelState){
+  const pagamentosExcel = excelState.pagamentos.map(p=>({...p, usado:false}));
   extratoState.forEach(l=>{
     if(isAplicacaoFinanceira(l.historico)){
       const saida = l.tipo === "D"; // saída = aplicando; entrada = resgatando
@@ -948,9 +1011,37 @@ function processar(){
       }
     }
   });
+  pagamentosSobrando = pagamentosExcel.filter(p=>!p.usado);
+  semPar = excelState.semPar;
+  }
+  if(demonstrativoState && demonstrativoState.length){
+    const contaRendimento = document.getElementById("contaRendimento").value.trim() || "56";
+    // Sem extrato solto: lança a provisão de TODOS os meses que o relatório trouxer (uso
+    // retroativo/inicial). Com extrato: lança só o(s) mês(es) presentes nele, pra não
+    // duplicar quando o mesmo relatório acumulado for enviado de novo no mês seguinte.
+    const mesesAlvo = (extratoState && extratoState.length)
+      ? [...new Set(extratoState.map(l=> `${l.data.y}-${l.data.m}`))].map(k=>{ const [y,m]=k.split("-").map(Number); return {y,m}; })
+      : demonstrativoState.map(p=>({y:p.y, m:p.m}));
+    const provisaoPorMes = new Map();
+    demonstrativoState.forEach(p=> provisaoPorMes.set(`${p.y}-${p.m}`, p.valor));
+    const mesesUnicos = new Map();
+    mesesAlvo.forEach(({y,m})=> mesesUnicos.set(`${y}-${m}`, {y,m}));
+    [...mesesUnicos.values()].sort((a,b)=> (a.y-b.y)||(a.m-b.m)).forEach(({y,m})=>{
+      const valor = provisaoPorMes.get(`${y}-${m}`);
+      if(valor==null) return; // relatório não cobre esse mês (ainda não fechou, ou fora do período baixado)
+      const mmAaaa = `${String(m).padStart(2,"0")}/${y}`;
+      rows.push({
+        data: ultimoDiaUtil(y,m), debito:contaAplicacao, credito:contaRendimento, valor,
+        hist:`VALOR REF. RENDIMENTOS DE APLICAÇÃO FINANCEIRA NO MÊS ${mmAaaa}`,
+        complemento:null, iniciaLote:1, flag:false, incluir:true,
+        statusText:"OK (provisão de rendimento — Demonstrativo de Aplicações)",
+        origem:`Demonstrativo de Aplicações — PROVISAO ${mmAaaa}`
+      });
+    });
+  }
   rowsState = rows;
   tableState = makeTableState();
-  renderTable(pagamentosExcel.filter(p=>!p.usado), excelState.semPar);
+  renderTable(pagamentosSobrando, semPar);
 }
 function updateRow(i, field, val){
   const r = rowsState[i];
